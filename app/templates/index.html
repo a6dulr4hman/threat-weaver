@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="text-3xl font-bold mb-6">Dashboard</h1>
+
+<section class="bg-white rounded-lg shadow p-6 mb-8">
+    <h2 class="text-xl font-semibold mb-4">Create Workspace</h2>
+    <form id="create-workspace-form" class="flex items-center space-x-4">
+        <input type="text" name="target_url" placeholder="Target URL (e.g. example.com)"
+               class="flex-1 border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+               required>
+        <button type="submit"
+                class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+            Create Workspace
+        </button>
+    </form>
+</section>
+
+<section class="bg-white rounded-lg shadow p-6">
+    <h2 class="text-xl font-semibold mb-4">Workspaces</h2>
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="border-b">
+                    <th class="py-2 px-3">Target URL</th>
+                    <th class="py-2 px-3">Nonce</th>
+                    <th class="py-2 px-3">Verified</th>
+                    <th class="py-2 px-3">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ws in workspaces %}
+                <tr class="border-b hover:bg-gray-50">
+                    <td class="py-2 px-3">{{ ws.target_url }}</td>
+                    <td class="py-2 px-3 font-mono text-sm">{{ ws.verification_nonce[:8] }}...</td>
+                    <td class="py-2 px-3">
+                        {% if ws.verification_status %}
+                        <span class="bg-green-100 text-green-800 text-xs font-medium px-2 py-1 rounded">Verified</span>
+                        {% else %}
+                        <span class="bg-red-100 text-red-800 text-xs font-medium px-2 py-1 rounded">Unverified</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2 px-3">
+                        <a href="/workspaces/{{ ws.id }}" class="text-blue-600 hover:underline">View</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<script>
+document.getElementById('create-workspace-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const targetUrl = form.target_url.value;
+    const response = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({target_url: targetUrl})
+    });
+    if (response.ok) {
+        window.location.reload();
+    }
+});
+</script>
+{% endblock %}

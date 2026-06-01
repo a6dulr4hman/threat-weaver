@@ -1,0 +1,6 @@
+/* ThreatWeaver custom styles */
+.code-block {
+    font-family: 'Courier New', monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
