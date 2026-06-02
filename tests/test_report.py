@@ -62,7 +62,7 @@ def test_build_report_extracts_findings():
     assert len(report["findings"]) == 1
     assert "POST http://t/login" in report["findings"][0]["title"]
     assert {(p["port"], p["service"]) for p in report["recon_ports"]} == {
-        (22, "ssh"), (80, "http")
+        ("22", "ssh"), ("80", "http")
     }
     assert report["remediations"] == [{"vuln_node": "login_json_vuln"}]
     assert report["timestamp"] != "N/A"

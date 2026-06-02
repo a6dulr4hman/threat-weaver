@@ -1,21 +1,24 @@
-"""PDF vulnerability report generation (replaces the email alert system).
+"""PDF vulnerability report generation.
 
 ReportService turns a job's attack graph + stored mitigations into a polished,
 downloadable PDF: executive summary, severity, confirmed findings, exposed
 services, and the full remediation code for each patched vulnerability.
 """
+import asyncio
 import json
 import os
+import textwrap
 from datetime import datetime, timezone
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import (
     HRFlowable,
     Paragraph,
+    Preformatted,
     SimpleDocTemplate,
     Spacer,
     Table,
@@ -29,13 +32,16 @@ from app.models import AnalysisJob, Mitigation
 # Where generated PDF reports are written.
 REPORT_DIR = os.getenv("REPORT_DIR", "/tmp/threatweaver/reports")
 
-# Severity -> accent colour for the PDF header.
-_SEVERITY_COLORS = {
-    "extreme": colors.HexColor("#dc2626"),
-    "high": colors.HexColor("#ea580c"),
-    "medium": colors.HexColor("#d97706"),
-    "low": colors.HexColor("#4b5563"),
+# Severity -> accent colour (plain hex string; avoids .hexval() method).
+_SEVERITY_HEX = {
+    "extreme": "#dc2626",
+    "high":    "#ea580c",
+    "medium":  "#d97706",
+    "low":     "#4b5563",
 }
+
+# Page width minus margins = usable text width.
+_TEXT_WIDTH = LETTER[0] - 1.6 * inch  # 0.8 in each side
 
 
 def _truncate(value, limit: int = 400) -> str:
@@ -43,13 +49,23 @@ def _truncate(value, limit: int = 400) -> str:
     return value if len(value) <= limit else value[:limit] + " ..."
 
 
+def _esc(text) -> str:
+    """Escape special characters for reportlab's mini-XML paragraph markup."""
+    return (
+        str(text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def build_report_data(attack_graph: dict, severity: str) -> dict:
     """
     Extract a human-readable report structure from the raw attack graph.
 
-    Produces: summary, severity, findings[], recon_ports[], remediations[]
-    (vuln_node only here; full code is attached separately from the DB),
-    plus a generated timestamp. Mirrors what the email builder used to do.
+    Returns: summary, severity, findings[], recon_ports[], remediations[],
+    patched_nodes[], and a UTC timestamp.
     """
     attack_graph = attack_graph or {}
     tool_results = attack_graph.get("tool_results", []) or []
@@ -67,7 +83,7 @@ def build_report_data(attack_graph: dict, severity: str) -> dict:
         if tool == "run_nmap":
             for svc in result.get("results", []) or []:
                 recon_ports.append({
-                    "port": svc.get("port"),
+                    "port": str(svc.get("port", "")),
                     "service": svc.get("service") or "unknown",
                     "version": svc.get("version") or "",
                 })
@@ -91,7 +107,9 @@ def build_report_data(attack_graph: dict, severity: str) -> dict:
                 kind = "Server-side error (HTTP 5xx)"
             else:
                 kind = "Anomalous response"
-            payload = args.get("json_body") or args.get("params") or args.get("payloads")
+            payload = (
+                args.get("json_body") or args.get("params") or args.get("payloads")
+            )
             key = (endpoint, kind)
             if key in findings_by_key:
                 findings_by_key[key]["count"] += 1
@@ -128,7 +146,41 @@ def build_report_data(attack_graph: dict, severity: str) -> dict:
         "findings": list(findings_by_key.values()),
         "recon_ports": recon_ports,
         "remediations": remediations,
+        "patched_nodes": attack_graph.get("patched_nodes", []),
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    }
+
+
+def _make_styles() -> dict:
+    """
+    Build all ParagraphStyle objects fresh each call.
+
+    We use unique names with a random suffix so repeated calls never trigger
+    reportlab's 'style already defined' error (which crashes the second PDF
+    generated in the same process).
+    """
+    import uuid
+    suffix = uuid.uuid4().hex[:8]
+    base = getSampleStyleSheet()
+
+    def st(name, **kw) -> ParagraphStyle:
+        parent = kw.pop("parent", base["BodyText"])
+        return ParagraphStyle(f"{name}_{suffix}", parent=parent, **kw)
+
+    return {
+        "title": st("title", parent=base["Title"],
+                    textColor=colors.HexColor("#0f172a"),
+                    fontSize=24, spaceAfter=2, alignment=TA_LEFT),
+        "sub":   st("sub", fontSize=9, textColor=colors.HexColor("#64748b"),
+                    spaceAfter=2),
+        "h2":    st("h2", parent=base["Heading2"],
+                    fontSize=13, spaceBefore=14, spaceAfter=4),
+        "body":  st("body", fontSize=10, leading=15, alignment=TA_LEFT),
+        "bold":  st("bold", fontSize=11, fontName="Helvetica-Bold",
+                    leading=15, spaceBefore=6),
+        "label": st("label", fontSize=9, textColor=colors.HexColor("#6b7280")),
+        "value": st("value", fontSize=9, textColor=colors.HexColor("#111827"),
+                    fontName="Helvetica-Bold"),
     }
 
 
@@ -139,7 +191,6 @@ class ReportService:
         self.report_dir = report_dir or REPORT_DIR
 
     def report_path(self, job_id: str) -> str:
-        """Filesystem path where this job's PDF lives (may not exist yet)."""
         return os.path.join(self.report_dir, f"{job_id}.pdf")
 
     async def _load_mitigations(self, db: AsyncSession, job_id: str) -> list[dict]:
@@ -154,26 +205,26 @@ class ReportService:
     async def generate(
         self, db: AsyncSession, job_id: str, severity: str, attack_graph: dict
     ) -> str:
-        """
-        Build the report data, render the PDF to disk, and return its path.
-
-        Always succeeds in producing a file (even with no findings), so the
-        download is reliably available after a scan.
-        """
+        """Build report data, render the PDF to disk, return its path."""
         data = build_report_data(attack_graph, severity)
         mitigations = await self._load_mitigations(db, job_id)
         target = await self._job_target(db, job_id)
 
         os.makedirs(self.report_dir, exist_ok=True)
         path = self.report_path(job_id)
-        # reportlab is synchronous; render directly (small documents, fast).
-        self._render_pdf(path, job_id, target, data, mitigations)
+        # Run the synchronous reportlab renderer off the event loop so it
+        # doesn't block the async worker on larger documents.
+        await asyncio.to_thread(
+            self._render_pdf, path, job_id, target, data, mitigations
+        )
         return path
 
     async def _job_target(self, db: AsyncSession, job_id: str) -> str:
         from app.models import Workspace
 
-        result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
+        result = await db.execute(
+            select(AnalysisJob).where(AnalysisJob.id == job_id)
+        )
         job = result.scalar_one_or_none()
         if not job:
             return ""
@@ -183,6 +234,10 @@ class ReportService:
         workspace = ws.scalar_one_or_none()
         return workspace.target_url if workspace else ""
 
+    # ------------------------------------------------------------------ #
+    # PDF rendering                                                        #
+    # ------------------------------------------------------------------ #
+
     def _render_pdf(
         self,
         path: str,
@@ -191,137 +246,178 @@ class ReportService:
         data: dict,
         mitigations: list[dict],
     ) -> None:
-        styles = getSampleStyleSheet()
-        accent = _SEVERITY_COLORS.get(data["severity"], colors.HexColor("#4b5563"))
+        sty = _make_styles()
+        severity = data.get("severity", "low")
+        accent_hex = _SEVERITY_HEX.get(severity, "#4b5563")
+        accent = colors.HexColor(accent_hex)
 
-        title_style = ParagraphStyle(
-            "TWTitle", parent=styles["Title"], textColor=colors.HexColor("#0f172a"),
-            fontSize=22, spaceAfter=4,
-        )
-        h2 = ParagraphStyle(
-            "TWH2", parent=styles["Heading2"], textColor=accent, fontSize=14,
-            spaceBefore=14, spaceAfter=6,
-        )
-        body = ParagraphStyle(
-            "TWBody", parent=styles["BodyText"], fontSize=10, leading=14,
-            alignment=TA_LEFT,
-        )
-        meta = ParagraphStyle(
-            "TWMeta", parent=styles["BodyText"], fontSize=9,
-            textColor=colors.HexColor("#64748b"),
-        )
-        code = ParagraphStyle(
-            "TWCode", parent=styles["Code"], fontSize=8, leading=11,
-            textColor=colors.HexColor("#0f172a"),
-            backColor=colors.HexColor("#f1f5f9"), borderPadding=6,
-        )
-        finding_title = ParagraphStyle(
-            "TWFinding", parent=body, fontSize=11, textColor=colors.HexColor("#111827"),
-            spaceBefore=8, fontName="Helvetica-Bold",
-        )
+        # Override h2 colour per severity.
+        sty["h2"].textColor = accent
 
         doc = SimpleDocTemplate(
-            path, pagesize=LETTER,
-            topMargin=0.7 * inch, bottomMargin=0.7 * inch,
-            leftMargin=0.8 * inch, rightMargin=0.8 * inch,
-            title=f"ThreatWeaver Report {job_id[:8]}",
+            path,
+            pagesize=LETTER,
+            topMargin=0.65 * inch,
+            bottomMargin=0.65 * inch,
+            leftMargin=0.8 * inch,
+            rightMargin=0.8 * inch,
+            title=f"ThreatWeaver Report – {job_id[:8]}",
+            author="ThreatWeaver Autonomous Security Engine",
         )
-        story = []
+        story: list = []
 
-        # --- Header ---
-        story.append(Paragraph("ThreatWeaver Security Report", title_style))
-        sev = data["severity"].upper()
+        # ── Header banner ──────────────────────────────────────────── #
+        story.append(Paragraph("ThreatWeaver Security Report", sty["title"]))
         story.append(Paragraph(
-            f'<font color="{accent.hexval()}"><b>Overall severity: {sev}</b></font>',
-            body,
+            f"Overall severity: <b>{severity.upper()}</b>",
+            ParagraphStyle(
+                f"sev_{severity}_{id(story)}",
+                parent=sty["body"],
+                textColor=accent,
+                fontSize=11,
+                spaceAfter=3,
+            ),
         ))
-        story.append(Paragraph(f"Target: {self._esc(target) or 'n/a'}", meta))
-        story.append(Paragraph(f"Job ID: {job_id}", meta))
-        story.append(Paragraph(f"Generated: {data['timestamp']}", meta))
-        story.append(Spacer(1, 6))
-        story.append(HRFlowable(width="100%", thickness=1, color=accent))
-
-        # --- Executive summary ---
-        if data["summary"]:
-            story.append(Paragraph("Executive Summary", h2))
-            story.append(Paragraph(self._esc(data["summary"]), body))
-
-        # --- Findings ---
-        story.append(Paragraph(
-            f"Vulnerabilities ({len(data['findings'])})", h2
+        story.append(Paragraph(f"Target: {_esc(target) or 'n/a'}", sty["sub"]))
+        story.append(Paragraph(f"Job ID: {job_id}", sty["sub"]))
+        story.append(Paragraph(f"Generated: {data['timestamp']}", sty["sub"]))
+        story.append(Spacer(1, 4))
+        story.append(HRFlowable(
+            width="100%", thickness=1.5, color=accent, spaceAfter=6
         ))
-        if data["findings"]:
-            for f in data["findings"]:
-                suffix = f" (x{f['count']})" if f.get("count", 1) > 1 else ""
-                story.append(Paragraph(self._esc(f["title"]) + suffix, finding_title))
+
+        # ── Executive Summary ──────────────────────────────────────── #
+        if data.get("summary"):
+            story.append(Paragraph("Executive Summary", sty["h2"]))
+            story.append(Paragraph(_esc(data["summary"]), sty["body"]))
+
+        # ── Findings ──────────────────────────────────────────────── #
+        findings = data.get("findings", [])
+        story.append(Paragraph(f"Vulnerabilities ({len(findings)})", sty["h2"]))
+        if findings:
+            for f in findings:
+                count = f.get("count", 1)
+                suffix = f" (x{count})" if count > 1 else ""
+                story.append(Paragraph(_esc(f["title"]) + suffix, sty["bold"]))
+                # 2-column detail table (Label | Value) for structure.
+                rows = []
+                if f.get("endpoint"):
+                    rows.append(["Endpoint", _esc(f["endpoint"])])
                 if f.get("payload"):
-                    story.append(Paragraph(
-                        f"<b>Payload:</b> <font face='Courier'>{self._esc(f['payload'])}</font>",
-                        body,
-                    ))
+                    rows.append(["Payload", _esc(f["payload"])])
                 if f.get("detail"):
-                    story.append(Paragraph(self._esc(f["detail"]), body))
+                    rows.append(["Detail", _esc(f["detail"])])
+                if rows:
+                    t = Table(
+                        rows,
+                        colWidths=[1.1 * inch, _TEXT_WIDTH - 1.1 * inch],
+                        hAlign="LEFT",
+                    )
+                    t.setStyle(TableStyle([
+                        ("FONTSIZE",    (0, 0), (-1, -1), 8),
+                        ("FONTNAME",    (0, 0), (0, -1), "Helvetica-Bold"),
+                        ("TEXTCOLOR",   (0, 0), (0, -1), colors.HexColor("#64748b")),
+                        ("TEXTCOLOR",   (1, 0), (1, -1), colors.HexColor("#111827")),
+                        ("VALIGN",      (0, 0), (-1, -1), "TOP"),
+                        ("TOPPADDING",  (0, 0), (-1, -1), 2),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                        ("LINEBELOW",   (0, -1), (-1, -1), 0.3,
+                         colors.HexColor("#e2e8f0")),
+                    ]))
+                    story.append(Spacer(1, 2))
+                    story.append(t)
+                story.append(Spacer(1, 6))
         else:
             story.append(Paragraph(
-                "No exploitable anomalies were confirmed during this scan.", body
+                "No exploitable anomalies were confirmed during this scan.",
+                sty["body"],
             ))
 
-        # --- Exposed services ---
-        if data["recon_ports"]:
-            story.append(Paragraph("Exposed Services", h2))
+        # ── Exposed Services ──────────────────────────────────────── #
+        ports = data.get("recon_ports", [])
+        if ports:
+            story.append(Paragraph("Exposed Services", sty["h2"]))
             rows = [["Port", "Service", "Version"]]
-            for p in data["recon_ports"]:
+            for p in ports:
                 rows.append([
-                    str(p.get("port", "")),
-                    self._esc(p.get("service", "")),
-                    self._esc(p.get("version", "")),
+                    p.get("port", ""),
+                    _esc(p.get("service", "")),
+                    _esc(p.get("version", "")),
                 ])
-            table = Table(rows, colWidths=[1.0 * inch, 2.2 * inch, 3.0 * inch])
-            table.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-                 [colors.white, colors.HexColor("#f8fafc")]),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            t = Table(
+                rows,
+                colWidths=[0.8 * inch, 1.6 * inch, _TEXT_WIDTH - 2.4 * inch],
+                hAlign="LEFT",
+            )
+            t.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+                ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",      (0, 0), (-1, -1), 9),
+                ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 6),
             ]))
-            story.append(table)
+            story.append(t)
 
-        # --- Remediations (full code from the mitigations table) ---
-        story.append(Paragraph(
-            f"Remediations ({len(mitigations)})", h2
-        ))
+        # ── Remediations ──────────────────────────────────────────── #
+        story.append(Paragraph(f"Remediations ({len(mitigations)})", sty["h2"]))
         if mitigations:
             for m in mitigations:
                 story.append(Paragraph(
-                    f"Patch for: <b>{self._esc(m['vuln_node'])}</b>", body
+                    f"Patch for: <b>{_esc(m['vuln_node'])}</b>", sty["body"]
                 ))
-                code_text = self._esc(m["code"] or "No remediation code available")
-                # Preserve line breaks for the code block.
-                code_text = code_text.replace("\n", "<br/>").replace(" ", "&nbsp;")
-                story.append(Paragraph(code_text, code))
-                story.append(Spacer(1, 6))
+                raw_code = m.get("code") or "# No remediation code available"
+                # Preformatted preserves indentation/newlines exactly and
+                # needs no XML escaping - it renders as plain monospace text.
+                # Wrap long lines so they don't overflow the page margin.
+                wrapped_lines = []
+                for line in raw_code.splitlines():
+                    if len(line) <= 90:
+                        wrapped_lines.append(line)
+                    else:
+                        wrapped_lines.extend(
+                            textwrap.wrap(line, width=90,
+                                          subsequent_indent="    ",
+                                          break_long_words=True)
+                        )
+                code_text = "\n".join(wrapped_lines)
+                story.append(Spacer(1, 3))
+                story.append(Preformatted(
+                    code_text,
+                    ParagraphStyle(
+                        f"code_{m['vuln_node']}_{id(story)}",
+                        fontName="Courier",
+                        fontSize=7.5,
+                        leading=11,
+                        backColor=colors.HexColor("#f1f5f9"),
+                        borderPadding=(4, 6, 4, 6),
+                        leftIndent=0,
+                        spaceAfter=8,
+                    ),
+                ))
         else:
-            story.append(Paragraph("No remediations were generated.", body))
+            story.append(Paragraph("No remediations were generated.", sty["body"]))
 
-        # --- Footer note ---
+        # ── Footer ────────────────────────────────────────────────── #
         story.append(Spacer(1, 16))
-        story.append(HRFlowable(width="100%", thickness=0.5,
-                                color=colors.HexColor("#cbd5e1")))
+        story.append(HRFlowable(
+            width="100%", thickness=0.5, color=colors.HexColor("#e2e8f0")
+        ))
         story.append(Paragraph(
-            "Generated by ThreatWeaver Autonomous Security Engine.", meta
+            "Generated by ThreatWeaver Autonomous Security Engine.",
+            ParagraphStyle(
+                f"footer_{id(story)}",
+                parent=sty["sub"],
+                alignment=TA_CENTER,
+            ),
         ))
 
         doc.build(story)
 
     @staticmethod
     def _esc(text) -> str:
-        """Escape text for reportlab's mini-HTML paragraph markup."""
-        return (
-            str(text)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
+        """Kept for backward-compat; module-level _esc is preferred."""
+        return _esc(text)
