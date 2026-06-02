@@ -7,9 +7,9 @@ from a response that may be wrapped in reasoning prose, and retries with a
 corrective nudge when the model forgets to emit parseable JSON.
 """
 import json
-import re
 
 from app.services.llm_client import LLMClient
+from app.services.llm_json import extract_json_object, is_api_error
 
 MAX_ITERATIONS = 20
 MAX_HISTORY_MESSAGES = 20
@@ -106,6 +106,19 @@ class K2Agent:
         for _attempt in range(MAX_PARSE_RETRIES + 1):
             response = await self.llm_client.chat(attempt_messages, role="agent")
             final_response = response
+
+            # Infrastructure errors (403, timeouts, rate limits) come back as
+            # "Error: ..." strings from the LLM client. Re-prompting with a
+            # formatting nudge won't help and just burns the rate-limit budget,
+            # so surface a clear API error and stop retrying.
+            if self._is_api_error(response):
+                decision = {
+                    "action": "error",
+                    "detail": f"K2 API error: {response[len('Error: '):].strip()}",
+                    "api_error": True,
+                }
+                break
+
             parsed = self._parse_decision(response)
             decision = parsed
             if parsed.get("action") != "error":
@@ -139,95 +152,15 @@ class K2Agent:
 
     # --- Response parsing -------------------------------------------------
 
+    @staticmethod
+    def _is_api_error(response: str) -> bool:
+        """True if the LLM client returned an infrastructure error string."""
+        return is_api_error(response)
+
     def _parse_decision(self, response: str) -> dict:
         """Parse K2's (possibly reasoning-wrapped) response into a decision dict."""
-        text = self._strip_reasoning(response)
-        decision = self._extract_action_json(text)
+        decision = extract_json_object(response, required_key="action")
         if decision is not None:
             return decision
         snippet = response.strip()[:200]
         return {"action": "error", "detail": f"Could not parse K2 response: {snippet}"}
-
-    @staticmethod
-    def _strip_reasoning(response: str) -> str:
-        """Remove <think>...</think> reasoning blocks so only the answer remains."""
-        text = response.strip()
-        # Drop fully-formed reasoning blocks.
-        text = re.sub(r"<think>.*?</think>", " ", text, flags=re.DOTALL | re.IGNORECASE)
-        # If a closing tag remains (unbalanced), keep only what follows the last one.
-        lower = text.lower()
-        if "</think>" in lower:
-            idx = lower.rfind("</think>")
-            text = text[idx + len("</think>"):]
-        # Drop any dangling opening tag.
-        text = re.sub(r"<think>", " ", text, flags=re.IGNORECASE)
-        return text.strip()
-
-    @classmethod
-    def _extract_action_json(cls, text: str) -> dict | None:
-        """Find a JSON object containing an 'action' key within free-form text."""
-        # 1) Markdown-fenced blocks (```json ... ``` or ``` ... ```).
-        for block in re.findall(
-            r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE
-        ):
-            obj = cls._load_action(block)
-            if obj is not None:
-                return obj
-
-        # 2) Balanced-brace scan. Prefer the LAST valid object, since a reasoning
-        #    model emits its final answer after the prose.
-        valid = [
-            obj
-            for obj in (cls._load_action(c) for c in cls._iter_brace_objects(text))
-            if obj is not None
-        ]
-        if valid:
-            return valid[-1]
-
-        # 3) Whole response as a single JSON document.
-        return cls._load_action(text)
-
-    @staticmethod
-    def _load_action(candidate: str) -> dict | None:
-        """json.loads a candidate string, returning it only if it has an 'action'."""
-        candidate = candidate.strip()
-        if not candidate:
-            return None
-        try:
-            obj = json.loads(candidate)
-        except (json.JSONDecodeError, ValueError):
-            return None
-        if isinstance(obj, dict) and "action" in obj:
-            return obj
-        return None
-
-    @staticmethod
-    def _iter_brace_objects(text: str):
-        """Yield top-level {...} substrings, ignoring braces inside JSON strings."""
-        depth = 0
-        start = None
-        in_str = False
-        escape = False
-        quote = ""
-        for i, ch in enumerate(text):
-            if in_str:
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif ch == quote:
-                    in_str = False
-                continue
-            if ch in ('"', "'"):
-                in_str = True
-                quote = ch
-            elif ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}":
-                if depth > 0:
-                    depth -= 1
-                    if depth == 0 and start is not None:
-                        yield text[start:i + 1]
-                        start = None

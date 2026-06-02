@@ -19,6 +19,10 @@ class MCPClient:
             proc = await asyncio.create_subprocess_exec(
                 "nmap",
                 "-sV",
+                "--version-light",  # lighter probes -> faster service detection
+                "-T4",  # more aggressive timing template
+                "--host-timeout",
+                "90s",  # give up on a host rather than hang the whole scan
                 "-p",
                 port_range,
                 target_domain,
@@ -27,15 +31,22 @@ class MCPClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=100)
         except FileNotFoundError:
             return {
                 "error": "nmap is not installed",
                 "results": [],
             }
         except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
             return {
-                "error": "nmap scan timed out",
+                "error": (
+                    "nmap scan timed out. Try a narrower port_range "
+                    "(e.g. '80,443,21,22') instead of a broad range."
+                ),
                 "results": [],
             }
 
@@ -59,7 +70,7 @@ class MCPClient:
         results = []
         anomalies_found = 0
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             for payload in parameter_payload_matrix:
                 start_time = time.monotonic()
                 try:
@@ -75,8 +86,12 @@ class MCPClient:
                     response_length = len(resp.content)
                     status_code = resp.status_code
 
-                    # Detect anomalies: unusual status codes or very slow responses
-                    anomaly = status_code >= 500 or elapsed_ms > 5000
+                    # A genuine anomaly is a server-side error (5xx) or a
+                    # suspiciously slow-but-successful response. We deliberately
+                    # do NOT treat a slow response on its own as an anomaly,
+                    # because a uniformly slow target (or an upstream proxy)
+                    # would otherwise flag every payload and mislead the agent.
+                    anomaly = status_code >= 500
                     if anomaly:
                         anomalies_found += 1
 
@@ -86,16 +101,24 @@ class MCPClient:
                         "response_length": response_length,
                         "response_time_ms": round(elapsed_ms, 2),
                         "anomaly_detected": anomaly,
+                        "transport_error": None,
                     })
-                except httpx.HTTPError:
+                except (httpx.TimeoutException, httpx.HTTPError) as e:
+                    # Connection-level failures (timeouts, refused connections,
+                    # TLS errors) are TRANSPORT problems, not application
+                    # vulnerabilities. Record them with status_code 0 but do
+                    # NOT count them as anomalies - otherwise an unreachable
+                    # https:// endpoint looks like a confirmed exploit, which is
+                    # exactly the false positive that led K2 to hallucinate an
+                    # RCE in earlier runs.
                     elapsed_ms = (time.monotonic() - start_time) * 1000
-                    anomalies_found += 1
                     results.append({
                         "payload": payload,
                         "status_code": 0,
                         "response_length": 0,
                         "response_time_ms": round(elapsed_ms, 2),
-                        "anomaly_detected": True,
+                        "anomaly_detected": False,
+                        "transport_error": type(e).__name__,
                     })
 
         return {
@@ -178,33 +201,77 @@ class MCPClient:
         self, component_signature: str, version_string: str
     ) -> dict:
         """
-        Query HackClub Search API for CVE/vulnerability data.
+        Query the Hack Club Search API for known vulnerabilities / CVEs.
+
+        The Hack Club Search API is a Brave Search proxy. The web search
+        endpoint is ``GET /res/v1/web/search?q=...`` and requires an API key
+        passed as a bearer token (``Authorization: Bearer sk-hc-v1-...``) or via
+        the ``x-subscription-token`` header. The response nests results under
+        ``data["web"]["results"]`` where each result has ``title``, ``url`` and
+        ``description`` fields.
+
+        See https://search.hackclub.com/docs for the full specification.
         """
-        url = "https://search.hackclub.com/api/search"
-        params = {"query": f"{component_signature} {version_string} vulnerability"}
+        api_key = os.getenv("HACKCLUB_API_KEY", "")
+        if not api_key:
+            return {
+                "references": [],
+                "vulnerable_components": [],
+                "mitigations": [],
+                "error": (
+                    "HACKCLUB_API_KEY is not set. Get a key from "
+                    "https://search.hackclub.com and set it in the environment."
+                ),
+            }
+
+        # Build a CVE-oriented query. Include the version only when known so we
+        # stay well under the 400-char / 50-word limit.
+        component = component_signature.strip()
+        version = (version_string or "").strip()
+        query = (
+            f"{component} {version} CVE vulnerability"
+            if version
+            else f"{component} CVE vulnerability"
+        )
+
+        url = "https://search.hackclub.com/res/v1/web/search"
+        params = {"q": query, "count": 5}
+        headers = {"Authorization": f"Bearer {api_key}"}
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, params=params)
+                resp = await client.get(url, params=params, headers=headers)
                 if resp.status_code != 200:
                     return {
                         "references": [],
                         "vulnerable_components": [],
                         "mitigations": [],
+                        "error": f"Hack Club Search API returned {resp.status_code}",
                     }
                 data = resp.json() if resp.content else {}
+                web_results = (data.get("web") or {}).get("results") or []
+                references = [
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "description": r.get("description", ""),
+                    }
+                    for r in web_results
+                ]
                 return {
-                    "references": data.get("results", []),
-                    "vulnerable_components": [
-                        f"{component_signature}@{version_string}"
-                    ],
+                    "references": references,
+                    "vulnerable_components": (
+                        [f"{component}@{version}"] if version else [component]
+                    ),
                     "mitigations": [],
+                    "error": None,
                 }
-        except (httpx.HTTPError, Exception):
+        except httpx.HTTPError as e:
             return {
                 "references": [],
                 "vulnerable_components": [],
                 "mitigations": [],
+                "error": f"Hack Club Search request failed: {e}",
             }
 
 

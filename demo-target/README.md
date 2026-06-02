@@ -30,6 +30,19 @@ The SAST layer scores `app.py` at **risk 100** with 15 findings spanning
 **Demo credentials:** `admin` / `S3cur3Adm1n!` (or `sales` / `letmein`).
 For the live show, the SQLi bypass `admin' --` with any password also logs in.
 
+## Exposed services (what recon finds)
+
+The deploy script stands up two services so reconnaissance discovers more than
+a lone web port:
+
+| Port | Service | Why it's interesting to the scanner |
+|------|---------|--------------------------------------|
+| 80 | Nimbus CRM (HTTP) | The vulnerable web app above |
+| 21 | vsftpd (FTP) | Real FTP daemon with a recognizable version banner and **anonymous access enabled** — a genuine misconfiguration nmap `-sV` will fingerprint |
+
+The FTP service is a real `vsftpd` install (not a spoofed banner), so the recon
+phase produces an authentic service fingerprint and an anonymous-login finding.
+
 ## Deploy it on your server (you run this, not me)
 
 On your demo VM:
@@ -47,8 +60,9 @@ and login on completion. The app is then reachable at `http://<server-ip>/`.
 
 ### Open the firewall
 
-In **Azure Portal → your VM → Networking → NSG**, add an inbound rule allowing
-TCP **80**. Without it, the scanner can't reach the target.
+In **Azure Portal → your VM → Networking → NSG**, add inbound rules allowing
+TCP **80** (web), **21** (FTP control), and **40000-40010** (FTP passive data).
+Without them, the scanner can't reach the targets.
 
 ## Routing: use DNS-only, not the Cloudflare proxy
 
@@ -72,11 +86,13 @@ exploit payloads before they reach the app — both of which break the demo.
 curl http://<server-ip>/login                                  # sign-in page (200)
 curl "http://<server-ip>/customer/abc"                          # -> 500 (SQLi anomaly)
 curl "http://<server-ip>/reports/compute?formula=__import__(1)" # -> 500 (eval anomaly)
+curl ftp://<server-ip>/pub/                                     # anonymous FTP listing
+nmap -sV -p 21,80 <server-ip>                                   # fingerprints both services
 ```
 
 ## Tear it down after the demo
 
 ```bash
-sudo systemctl disable --now nimbus-crm
-sudo rm -rf /opt/nimbus-crm /etc/systemd/system/nimbus-crm.service
+sudo systemctl disable --now nimbus-crm vsftpd
+sudo rm -rf /opt/nimbus-crm /etc/systemd/system/nimbus-crm.service /srv/ftp
 ```

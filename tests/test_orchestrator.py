@@ -591,3 +591,24 @@ async def test_orchestrator_complete_state_noop(db_session):
     assert final_state == FSMState.COMPLETE
     # LLM should never have been called
     mock_llm.chat.assert_not_called()
+
+
+
+async def test_k2_agent_api_error_stops_retrying():
+    """
+    An 'Error: ...' API response (e.g. 403) is surfaced as an api_error and the
+    agent does NOT waste its parse retries nudging K2.
+    """
+    from app.services.k2_agent import K2Agent
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value="Error: API returned status 403")
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "ready", "target": "x.com"})
+
+    assert decision["action"] == "error"
+    assert decision.get("api_error") is True
+    assert "403" in decision["detail"]
+    # Should have called the API exactly once (no retry storm).
+    assert mock_llm.chat.call_count == 1
