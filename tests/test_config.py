@@ -2,6 +2,14 @@ import pytest
 
 
 @pytest.mark.asyncio
+async def test_config_page(client):
+    response = await client.get("/config/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Notification Routing Configuration" in response.text
+
+
+@pytest.mark.asyncio
 async def test_upsert_routing_config(client):
     response = await client.put(
         "/api/config/routing/ciso",

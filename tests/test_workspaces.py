@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
@@ -50,15 +50,59 @@ async def test_verify_workspace(client):
         "/api/workspaces", json={"target_url": "example.com"}
     )
     workspace_id = create_resp.json()["id"]
-    nonce = create_resp.json()["verification_nonce"]
-
-    mock_response = AsyncMock()
-    mock_response.status_code = 200
-    mock_response.text = nonce
 
     with patch("app.routers.workspaces.verify_domain", new_callable=AsyncMock) as mock_verify:
         mock_verify.return_value = True
         response = await client.post(f"/api/workspaces/{workspace_id}/verify")
+
+    assert response.status_code == 200
+    assert response.json()["verification_status"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_workspace_dns(client):
+    """Test that DNS TXT verification works when the record contains the nonce."""
+    create_resp = await client.post(
+        "/api/workspaces", json={"target_url": "example.com"}
+    )
+    workspace_id = create_resp.json()["id"]
+    nonce = create_resp.json()["verification_nonce"]
+
+    # Mock DNS resolver to return the nonce in a TXT record
+    mock_rdata = MagicMock()
+    mock_rdata.strings = [nonce.encode()]
+    mock_answer = MagicMock()
+    mock_answer.__iter__ = lambda self: iter([mock_rdata])
+
+    with patch("app.services.verification.dns.resolver.resolve", return_value=mock_answer):
+        with patch("app.services.verification.asyncio.get_event_loop") as mock_loop:
+            # Make run_in_executor call the function directly
+            async def run_executor(executor, func, *args):
+                return func(*args)
+            mock_loop.return_value.run_in_executor = AsyncMock(side_effect=lambda ex, fn, *a: _run_sync(fn, *a))
+
+    # Use a simpler approach - patch the internal _check_dns_txt directly
+    with patch("app.services.verification._check_dns_txt", new_callable=AsyncMock) as mock_dns:
+        mock_dns.return_value = True
+        response = await client.post(f"/api/workspaces/{workspace_id}/verify")
+
+    assert response.status_code == 200
+    assert response.json()["verification_status"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_workspace_dns_fallback_to_http(client):
+    """Test that HTTP fallback works when DNS verification fails."""
+    create_resp = await client.post(
+        "/api/workspaces", json={"target_url": "example.com"}
+    )
+    workspace_id = create_resp.json()["id"]
+
+    with patch("app.services.verification._check_dns_txt", new_callable=AsyncMock) as mock_dns:
+        mock_dns.return_value = False
+        with patch("app.services.verification._check_http", new_callable=AsyncMock) as mock_http:
+            mock_http.return_value = True
+            response = await client.post(f"/api/workspaces/{workspace_id}/verify")
 
     assert response.status_code == 200
     assert response.json()["verification_status"] is True

@@ -6,8 +6,16 @@
 <section class="bg-white rounded-lg shadow p-6 mb-8">
     <h2 class="text-xl font-semibold mb-4">Verification</h2>
     <div class="mb-4">
-        <p class="text-sm text-gray-600 mb-1">Nonce (place this as a TXT record or at /.well-known/threatweaver):</p>
-        <code class="block bg-gray-100 p-3 rounded font-mono text-sm break-all select-all">{{ workspace.verification_nonce }}</code>
+        <p class="text-sm text-gray-600 mb-2">To verify ownership, add a DNS TXT record:</p>
+        <div class="bg-gray-100 p-3 rounded mb-2">
+            <p class="text-xs text-gray-500 mb-1">Record name:</p>
+            <code class="font-mono text-sm break-all select-all">_threatweaver.{{ workspace.target_url }}</code>
+        </div>
+        <div class="bg-gray-100 p-3 rounded mb-2">
+            <p class="text-xs text-gray-500 mb-1">Record value:</p>
+            <code class="font-mono text-sm break-all select-all">{{ workspace.verification_nonce }}</code>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">Alternatively, serve this nonce at <code>https://{{ workspace.target_url }}/threatweaver.txt</code></p>
     </div>
     <div class="flex items-center space-x-4">
         <span>

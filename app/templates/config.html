@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="text-3xl font-bold mb-6">Notification Routing Configuration</h1>
+
+<section class="bg-white rounded-lg shadow p-6 mb-8">
+    <h2 class="text-xl font-semibold mb-4">Add / Update Routing Rule</h2>
+    <form id="config-form" class="flex items-end space-x-4">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Role</label>
+            <input type="text" id="role-input" placeholder="e.g. ciso"
+                   class="border border-gray-300 rounded px-3 py-2 w-48" required>
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+            <input type="email" id="email-input" placeholder="ciso@example.com"
+                   class="border border-gray-300 rounded px-3 py-2 w-64" required>
+        </div>
+        <button type="submit"
+                class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+            Save
+        </button>
+    </form>
+</section>
+
+<section class="bg-white rounded-lg shadow p-6">
+    <h2 class="text-xl font-semibold mb-4">Current Routing Rules</h2>
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="border-b">
+                    <th class="py-2 px-3">Role</th>
+                    <th class="py-2 px-3">Email Address</th>
+                    <th class="py-2 px-3">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="config-table-body">
+                {% for config in configs %}
+                <tr class="border-b hover:bg-gray-50" data-role="{{ config.role }}">
+                    <td class="py-2 px-3 font-mono text-sm">{{ config.role }}</td>
+                    <td class="py-2 px-3">{{ config.email_address }}</td>
+                    <td class="py-2 px-3">
+                        <button onclick="deleteConfig('{{ config.role }}')"
+                                class="text-red-600 hover:text-red-800 text-sm font-medium">
+                            Delete
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<script>
+document.getElementById('config-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const role = document.getElementById('role-input').value.trim();
+    const email = document.getElementById('email-input').value.trim();
+    if (!role || !email) return;
+
+    const response = await fetch(`/api/config/routing/${encodeURIComponent(role)}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({role: role, email_address: email})
+    });
+    if (response.ok) {
+        window.location.reload();
+    } else {
+        alert('Failed to save routing config');
+    }
+});
+
+async function deleteConfig(role) {
+    if (!confirm(`Delete routing config for "${role}"?`)) return;
+    const response = await fetch(`/api/config/routing/${encodeURIComponent(role)}`, {
+        method: 'DELETE'
+    });
+    if (response.ok) {
+        window.location.reload();
+    } else {
+        alert('Failed to delete routing config');
+    }
+}
+</script>
+{% endblock %}
