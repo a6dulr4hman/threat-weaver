@@ -5,8 +5,8 @@ downloadable PDF: executive summary, severity, confirmed findings, exposed
 services, and the full remediation code for each patched vulnerability.
 """
 import asyncio
-import json
 import os
+import re
 import textwrap
 from datetime import datetime, timezone
 
@@ -49,15 +49,50 @@ def _truncate(value, limit: int = 400) -> str:
     return value if len(value) <= limit else value[:limit] + " ..."
 
 
+# Characters that are valid in XML 1.0 (the subset reportlab uses).
+# Anything outside this set will cause a black replacement box.
+_VALID_XML_CHARS = re.compile(
+    r"[^\x09\x0A\x0D\x20-\x7E\xA0-\uD7FF\uE000-\uFFFD]"
+)
+
+# Typography replacements: swap smart/fancy Unicode chars that aren't
+# in Helvetica's standard encoding for their plain ASCII equivalents.
+_UNICODE_REPLACEMENTS = str.maketrans({
+    "\u2014": "--",    # em dash
+    "\u2013": "-",     # en dash
+    "\u2018": "'",     # left single quote
+    "\u2019": "'",     # right single quote
+    "\u201c": '"',     # left double quote
+    "\u201d": '"',     # right double quote
+    "\u2026": "...",   # ellipsis
+    "\u00a0": " ",     # non-breaking space
+    "\u2011": "-",     # non-breaking hyphen
+})
+
+
+def _safe_text(text) -> str:
+    """
+    Sanitise a string so it is safe to embed inside a reportlab Paragraph.
+
+    Steps:
+      1. Coerce to str, replacing lone surrogates.
+      2. Swap fancy Unicode typography to plain ASCII equivalents
+         (em-dash, curly quotes, etc. cause black replacement boxes when
+         the font doesn't include those glyphs).
+      3. Strip any remaining control characters that are invalid in XML 1.0.
+      4. XML-escape &, <, > so the Paragraph mini-parser doesn't mistake
+         them for markup tags. We intentionally do NOT escape " because
+         we never put these values inside XML attribute values.
+    """
+    s = str(text or "").encode("utf-8", errors="replace").decode("utf-8")
+    s = s.translate(_UNICODE_REPLACEMENTS)
+    s = _VALID_XML_CHARS.sub("", s)
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _esc(text) -> str:
-    """Escape special characters for reportlab's mini-XML paragraph markup."""
-    return (
-        str(text or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    """Alias kept for backward-compat; _safe_text is preferred for PDF."""
+    return _safe_text(text)
 
 
 def build_report_data(attack_graph: dict, severity: str) -> dict:
@@ -110,16 +145,27 @@ def build_report_data(attack_graph: dict, severity: str) -> dict:
             payload = (
                 args.get("json_body") or args.get("params") or args.get("payloads")
             )
+            # Store payload as a clean human-readable string. Do NOT call
+            # json.dumps here — that produces {"key": "value"} which would
+            # then get double-escaped later. Use repr-style or just pretty-print.
+            if payload and isinstance(payload, dict):
+                payload_str = ", ".join(
+                    f"{k}: {v}" for k, v in list(payload.items())[:4]
+                )
+            elif payload:
+                payload_str = _truncate(str(payload))
+            else:
+                payload_str = ""
             key = (endpoint, kind)
             if key in findings_by_key:
                 findings_by_key[key]["count"] += 1
             else:
                 findings_by_key[key] = {
-                    "title": f"{kind} \u2014 {method} {endpoint}",
+                    "title": f"{kind} — {method} {endpoint}",
                     "kind": kind,
                     "endpoint": endpoint,
                     "method": method,
-                    "payload": _truncate(json.dumps(payload)) if payload else "",
+                    "payload": _truncate(payload_str),
                     "detail": _truncate(result.get("telemetry") or ""),
                     "count": 1,
                 }
@@ -308,13 +354,34 @@ class ReportService:
                 suffix = f" (x{count})" if count > 1 else ""
                 story.append(Paragraph(_esc(f["title"]) + suffix, sty["bold"]))
                 # 2-column detail table (Label | Value) for structure.
+                # Payload and Detail use Preformatted so JSON/exception text
+                # is rendered literally without any XML interpretation.
                 rows = []
                 if f.get("endpoint"):
-                    rows.append(["Endpoint", _esc(f["endpoint"])])
+                    rows.append([
+                        Paragraph("<b>Endpoint</b>", sty["label"]),
+                        Paragraph(_safe_text(f["endpoint"]), sty["body"]),
+                    ])
                 if f.get("payload"):
-                    rows.append(["Payload", _esc(f["payload"])])
+                    payload_pre = Preformatted(
+                        _truncate(str(f["payload"]), 200),
+                        ParagraphStyle(
+                            f"pl_{id(f)}",
+                            fontName="Courier", fontSize=7.5, leading=10,
+                        ),
+                    )
+                    rows.append([Paragraph("<b>Payload</b>", sty["label"]), payload_pre])
                 if f.get("detail"):
-                    rows.append(["Detail", _esc(f["detail"])])
+                    # Telemetry strings contain raw exception text with \x
+                    # escapes and punctuation that would break XML parsing.
+                    detail_pre = Preformatted(
+                        _truncate(str(f["detail"]), 300),
+                        ParagraphStyle(
+                            f"dl_{id(f)}",
+                            fontName="Courier", fontSize=7.5, leading=10,
+                        ),
+                    )
+                    rows.append([Paragraph("<b>Detail</b>", sty["label"]), detail_pre])
                 if rows:
                     t = Table(
                         rows,
@@ -323,9 +390,6 @@ class ReportService:
                     )
                     t.setStyle(TableStyle([
                         ("FONTSIZE",    (0, 0), (-1, -1), 8),
-                        ("FONTNAME",    (0, 0), (0, -1), "Helvetica-Bold"),
-                        ("TEXTCOLOR",   (0, 0), (0, -1), colors.HexColor("#64748b")),
-                        ("TEXTCOLOR",   (1, 0), (1, -1), colors.HexColor("#111827")),
                         ("VALIGN",      (0, 0), (-1, -1), "TOP"),
                         ("TOPPADDING",  (0, 0), (-1, -1), 2),
                         ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
