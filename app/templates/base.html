@@ -5,15 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ThreatWeaver</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            850: '#172033',
+                            950: '#0a0f1a'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="bg-gray-100 min-h-screen flex flex-col">
-    <nav class="bg-gray-900 text-white shadow-lg">
-        <div class="container mx-auto px-4 py-3 flex items-center justify-between">
-            <a href="/" class="text-xl font-bold tracking-tight">ThreatWeaver</a>
-            <div class="flex space-x-4">
-                <a href="/" class="hover:text-gray-300">Dashboard</a>
-                <a href="/config" class="hover:text-gray-300">Configuration</a>
+<body class="bg-slate-900 min-h-screen flex flex-col font-sans text-gray-100">
+    <nav class="bg-slate-950 border-b border-slate-800 shadow-lg shadow-slate-950/50">
+        <div class="container mx-auto px-4 py-4 flex items-center justify-between">
+            <a href="/" class="flex items-center space-x-2 group">
+                <svg class="w-7 h-7 text-cyan-400 group-hover:text-cyan-300 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                </svg>
+                <span class="text-xl font-bold tracking-tight text-cyan-400 group-hover:text-cyan-300 transition-colors">ThreatWeaver</span>
+            </a>
+            <div class="flex items-center space-x-6">
+                <a href="/" class="text-gray-300 hover:text-cyan-400 transition-colors text-sm font-medium relative nav-link">Dashboard</a>
+                <a href="/config" class="text-gray-300 hover:text-cyan-400 transition-colors text-sm font-medium relative nav-link">Configuration</a>
             </div>
         </div>
     </nav>
@@ -22,8 +48,8 @@
         {% block content %}{% endblock %}
     </main>
 
-    <footer class="bg-gray-800 text-gray-400 text-center py-4">
-        <p>ThreatWeaver - Autonomous DevSecOps Engine</p>
+    <footer class="bg-slate-950 border-t border-slate-800 text-gray-500 text-center py-4">
+        <p class="text-sm">ThreatWeaver &mdash; Autonomous DevSecOps Engine &middot; v1.0</p>
     </footer>
 </body>
 </html>

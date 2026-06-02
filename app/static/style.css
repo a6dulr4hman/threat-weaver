@@ -1,6 +1,156 @@
-/* ThreatWeaver custom styles */
+/* ThreatWeaver - Dark Cyber Security Theme */
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1e293b;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #475569;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+}
+
+/* Code blocks */
 .code-block {
-    font-family: 'Courier New', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
     white-space: pre-wrap;
     word-break: break-word;
+    line-height: 1.6;
+}
+
+.code-block code {
+    font-size: 0.8125rem;
+}
+
+/* Glow effects */
+.glow-cyan {
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.15), 0 0 4px rgba(34, 211, 238, 0.1);
+}
+
+.glow-green {
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.15);
+}
+
+/* Pulsing animation for active state */
+@keyframes pulse-glow {
+    0%, 100% {
+        box-shadow: 0 0 8px rgba(34, 211, 238, 0.4), 0 0 20px rgba(34, 211, 238, 0.2);
+    }
+    50% {
+        box-shadow: 0 0 16px rgba(34, 211, 238, 0.6), 0 0 32px rgba(34, 211, 238, 0.3);
+    }
+}
+
+.pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Nav link hover underline effect */
+.nav-link::after {
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    left: 0;
+    width: 0;
+    height: 2px;
+    background: linear-gradient(to right, #22d3ee, #3b82f6);
+    border-radius: 1px;
+    transition: width 0.3s ease;
+}
+
+.nav-link:hover::after {
+    width: 100%;
+}
+
+/* Smooth transitions for interactive elements */
+a, button, input, select, textarea {
+    transition: all 0.2s ease;
+}
+
+/* Details/summary styling */
+details summary::-webkit-details-marker {
+    display: none;
+}
+
+details summary::marker {
+    display: none;
+    content: '';
+}
+
+/* Page transition */
+main {
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Print-friendly overrides */
+@media print {
+    body {
+        background: white !important;
+        color: black !important;
+    }
+
+    nav, footer {
+        display: none !important;
+    }
+
+    main {
+        animation: none !important;
+    }
+
+    .bg-slate-800,
+    .bg-slate-900,
+    .bg-slate-950 {
+        background: white !important;
+        border-color: #e2e8f0 !important;
+        box-shadow: none !important;
+    }
+
+    .text-gray-100,
+    .text-gray-200,
+    .text-gray-300,
+    .text-cyan-400,
+    .text-cyan-300 {
+        color: black !important;
+    }
+
+    .text-gray-400,
+    .text-gray-500 {
+        color: #4a5568 !important;
+    }
+
+    .pulse-glow {
+        animation: none !important;
+    }
+
+    .glow-cyan,
+    .glow-green {
+        box-shadow: none !important;
+    }
+
+    pre, code {
+        background: #f7fafc !important;
+        color: #1a202c !important;
+        border: 1px solid #e2e8f0 !important;
+    }
 }
