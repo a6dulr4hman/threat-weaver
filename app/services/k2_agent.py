@@ -37,6 +37,7 @@ class K2Agent:
         return json.dumps({
             "current_phase": context.get("phase", "ready"),
             "target": context.get("target"),
+            "code_analysis": context.get("code_analysis"),
             "attack_graph": context.get("attack_graph", {}),
             "iteration": context.get("iteration", 0),
             "available_tools": [

@@ -1,16 +1,40 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import async_session, get_db
 from app.models import AnalysisJob, Mitigation, Workspace
 from app.schemas import JobCreate, JobResponse, MitigationResponse
+from app.services.orchestrator import FSMState, OrchestratorFSM
 from app.templating import templates
 
 api_router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 html_router = APIRouter(prefix="/jobs", tags=["jobs-html"])
+
+# Outer-loop safety cap. Each run_cycle() runs the full K2 agentic loop
+# (up to MAX_ITERATIONS); we re-run a few times in case a cycle exits early
+# without reaching COMPLETE (e.g. a transient parse error).
+MAX_OUTER_CYCLES = 5
+
+
+async def _run_analysis_job(job_id: str) -> None:
+    """
+    Background task: drive the K2 orchestrator for a job to completion.
+
+    Runs in its own DB session because the request-scoped session is closed
+    once the HTTP response is returned.
+    """
+    async with async_session() as db:
+        fsm = OrchestratorFSM(db, job_id)
+        previous_state: str | None = None
+        for _ in range(MAX_OUTER_CYCLES):
+            state = await fsm.run_cycle()
+            # Stop when finished or when a cycle made no forward progress.
+            if state == FSMState.COMPLETE or state.value == previous_state:
+                break
+            previous_state = state.value
 
 
 @api_router.post("/", response_model=JobResponse, status_code=201)
@@ -36,6 +60,35 @@ async def create_job(job_in: JobCreate, db: AsyncSession = Depends(get_db)):
     db.add(job)
     await db.commit()
     await db.refresh(job)
+    return job
+
+
+@api_router.post("/{job_id}/start", response_model=JobResponse)
+async def start_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Launch the K2-driven analysis pipeline for a job as a background task."""
+    result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Guard against re-running an in-progress or finished job.
+    running_states = {s.value for s in FSMState} - {FSMState.COMPLETE.value}
+    if job.status in running_states and job.status != FSMState.READY.value:
+        raise HTTPException(status_code=409, detail="Job is already running")
+    if job.status == FSMState.COMPLETE.value:
+        raise HTTPException(status_code=409, detail="Job already completed")
+
+    # Mark as started so the UI reflects progress immediately; the orchestrator
+    # treats a non-FSM status ("pending") as READY on hydration.
+    job.status = FSMState.READY.value
+    await db.commit()
+    await db.refresh(job)
+
+    background_tasks.add_task(_run_analysis_job, job_id)
     return job
 
 
