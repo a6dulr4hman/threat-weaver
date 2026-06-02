@@ -18,6 +18,16 @@ from app.services.mcp_client import MCPClient
 # Where imported GitHub repos are cloned (see routers/workspaces.py import-repo).
 REPO_BASE_DIR = "/tmp/threatweaver"
 
+# Cognitive-fuzzing guardrail: how many non-anomalous payloads the agent may
+# fire at a single endpoint before the orchestrator forces it to move on. This
+# bounds the loop so a stubborn route can't burn the 60k token budget or the
+# 120s gateway timeout. Stored alongside FSM state in SQLite (attack_graph).
+MAX_ATTACK_ATTEMPTS = 3
+
+# Tools that constitute an "attack attempt" against a specific endpoint and are
+# therefore subject to the per-endpoint budget above.
+ATTACK_TOOLS = {"send_http_request", "run_fuzzer"}
+
 
 class FSMState(str, Enum):
     READY = "ready"
@@ -206,6 +216,8 @@ class OrchestratorFSM:
                 "target": target,
                 "attack_graph": self.attack_graph,
                 "code_analysis": self.attack_graph.get("code_analysis"),
+                "endpoint_attempts": self.attack_graph.get("endpoint_attempts", {}),
+                "exhausted_endpoints": self.attack_graph.get("exhausted_endpoints", []),
                 "iteration": iteration,
             }
 
@@ -222,6 +234,25 @@ class OrchestratorFSM:
             elif action == "tool_call":
                 tool_name = decision.get("tool", "")
                 arguments = decision.get("arguments", {})
+
+                # Guardrail: refuse further attacks on an exhausted endpoint and
+                # nudge the agent to pivot, without spending a real request.
+                endpoint_key = self._endpoint_key(tool_name, arguments)
+                if endpoint_key and self._is_endpoint_exhausted(endpoint_key):
+                    note = (
+                        f"Blocked: endpoint '{endpoint_key}' already hit the "
+                        f"{MAX_ATTACK_ATTEMPTS}-attempt limit. Choose a different "
+                        "endpoint or finish."
+                    )
+                    self.attack_graph.setdefault("guardrail_notes", []).append({
+                        "iteration": iteration,
+                        "endpoint": endpoint_key,
+                        "note": note,
+                    })
+                    agent.feed_note(note)
+                    await self.save_state()
+                    continue
+
                 result = await executor.execute(tool_name, arguments)
                 # Store result in attack graph
                 self.attack_graph.setdefault("tool_results", []).append({
@@ -233,6 +264,15 @@ class OrchestratorFSM:
                 })
                 # Feed result back to K2
                 agent.feed_result(tool_name, result)
+
+                # Per-endpoint attack budget: count the attempt, and if the
+                # endpoint is now exhausted (or just short of it), tell the agent.
+                if endpoint_key:
+                    was_anomaly = self._result_is_anomaly(result)
+                    note = self._record_attempt(endpoint_key, was_anomaly)
+                    if note:
+                        agent.feed_note(note)
+
                 # Advance FSM state based on tool type
                 self._maybe_advance_state(tool_name)
                 # Checkpoint after each tool execution to prevent data loss
@@ -266,6 +306,7 @@ class OrchestratorFSM:
         tool_to_min_state = {
             "run_nmap": FSMState.RECON,
             "run_fuzzer": FSMState.DAST_TESTING,
+            "send_http_request": FSMState.DAST_TESTING,
             "execute_safe_poc": FSMState.POC_VERIFICATION,
             "query_hackclub": FSMState.POC_VERIFICATION,
             "generate_patch": FSMState.BLUE_TEAM_REMEDIATION,
@@ -277,3 +318,78 @@ class OrchestratorFSM:
         valid_next = TRANSITIONS.get(self.state, [])
         if valid_next and self.state != target_state:
             self.transition(valid_next[0])
+
+    # --- Per-endpoint attack guardrails -----------------------------------
+
+    @staticmethod
+    def _endpoint_key(tool_name: str, arguments: dict) -> str | None:
+        """
+        Derive a stable endpoint identifier for an attack tool call.
+
+        Strips the query string so repeated attacks on the same path (with
+        different payloads) count against one budget. Returns None for tools
+        that aren't endpoint-scoped attacks.
+        """
+        if tool_name not in ATTACK_TOOLS:
+            return None
+        raw = arguments.get("endpoint") or arguments.get("url") or ""
+        if not raw:
+            return None
+        # Normalise: drop query/fragment so ?a=1 and ?a=2 share a budget.
+        return raw.split("?", 1)[0].split("#", 1)[0].rstrip("/") or raw
+
+    @staticmethod
+    def _result_is_anomaly(result: dict) -> bool:
+        """
+        Did an attack tool result trigger an anomaly worth pursuing?
+
+        An anomaly resets the agent's "stuck" status for that endpoint - it has
+        found something to dig into, so we don't penalise it under the budget.
+        """
+        if not isinstance(result, dict):
+            return False
+        # send_http_request signals.
+        if result.get("is_server_error") or result.get("stack_trace_detected"):
+            return True
+        # run_fuzzer signal.
+        if result.get("anomalies_found", 0):
+            return True
+        return False
+
+    def _is_endpoint_exhausted(self, endpoint_key: str) -> bool:
+        """True if this endpoint has already hit the attack-attempt budget."""
+        exhausted = self.attack_graph.get("exhausted_endpoints", [])
+        return endpoint_key in exhausted
+
+    def _record_attempt(self, endpoint_key: str, was_anomaly: bool) -> str | None:
+        """
+        Update the per-endpoint attempt counter after an attack tool call.
+
+        A non-anomalous attempt increments the counter; reaching
+        MAX_ATTACK_ATTEMPTS marks the endpoint exhausted. An anomaly resets the
+        counter (the agent has a lead to pursue). Returns a guardrail note to
+        feed back to the agent, or None.
+        """
+        attempts = self.attack_graph.setdefault("endpoint_attempts", {})
+        exhausted = self.attack_graph.setdefault("exhausted_endpoints", [])
+
+        if was_anomaly:
+            # Found something - reset the budget so the agent can keep probing
+            # this lead without being cut off.
+            attempts[endpoint_key] = 0
+            return None
+
+        attempts[endpoint_key] = attempts.get(endpoint_key, 0) + 1
+        if attempts[endpoint_key] >= MAX_ATTACK_ATTEMPTS:
+            if endpoint_key not in exhausted:
+                exhausted.append(endpoint_key)
+            return (
+                f"Endpoint '{endpoint_key}' is exhausted: {MAX_ATTACK_ATTEMPTS} "
+                "crafted payloads triggered no anomaly. Stop attacking this route "
+                "and move on to a different endpoint or finish the analysis."
+            )
+        remaining = MAX_ATTACK_ATTEMPTS - attempts[endpoint_key]
+        return (
+            f"No anomaly on '{endpoint_key}' (attempt {attempts[endpoint_key]} of "
+            f"{MAX_ATTACK_ATTEMPTS}, {remaining} left). Pivot your payload or move on."
+        )

@@ -16,9 +16,9 @@ MAX_HISTORY_MESSAGES = 20
 # How many times to re-prompt K2 when its reply can't be parsed into a decision.
 MAX_PARSE_RETRIES = 2
 
-SYSTEM_PROMPT = """You are K2-Think-v2, the autonomous security analysis engine that DRIVES \
+SYSTEM_PROMPT = """You are K2-Think-v2, the autonomous Cognitive Red Team agent that DRIVES \
 the ThreatWeaver vulnerability pipeline. You are in control and decide every action - \
-the platform only executes the tool calls you choose.
+the platform only executes the tool calls you choose and feeds the raw results back to you.
 
 You may reason internally. If you do, wrap ALL of your reasoning inside <think>...</think> \
 tags. After any reasoning, your message MUST end with exactly ONE JSON object and nothing \
@@ -32,22 +32,46 @@ The final JSON object MUST be one of these two shapes:
 
 Available tools and their arguments:
 - run_nmap: {"target": "domain.com", "port_range": "1-1024"}
-- run_fuzzer: {"url": "https://domain.com/path", "payloads": [{"param": "q", "value": "..."}], "injection_type": "query|body"}
+- send_http_request: {"method": "GET|POST|PUT|PATCH|DELETE", "endpoint": "http://host/path", "headers": {...}, "json_body": {...}, "params": {...}}
+- run_fuzzer: {"url": "http://domain.com/path", "payloads": [{"param": "q", "value": "..."}], "injection_type": "query|body"}
 - execute_safe_poc: {"sandbox_id": "<id>", "script": "<python script>", "expected_signature": {...}}
 - query_hackclub: {"component": "<name>", "version": "<version>"}
 - generate_patch: {"vuln_node": "<id>", "source_code": "<code to fix>"}
 
-Recommended workflow: start with reconnaissance (run_nmap), probe endpoints (run_fuzzer), \
-verify findings in the sandbox (execute_safe_poc), look up known CVEs (query_hackclub), \
-then generate_patch for each confirmed vulnerability. When no further useful action \
-remains, return {"action": "complete", ...}.
+CORE METHOD - the Context-Aware Exploitation Loop (ReAct):
+Your primary weapon is `send_http_request`, a RAW HTTP primitive. Do not rely on packaged
+payload scripts; construct each attack vector yourself by reasoning about the application's
+business logic, then observe the real response and pivot.
+
+1. OBSERVE: Read the SAST code analysis. Find a concrete route and its expected inputs
+   (e.g. "a /transfer route in app.py expecting `amount` and `target_account`").
+2. REASON: Infer a SPECIFIC flaw from the logic, not a generic attack. Example:
+   <think>The AST map shows no validation on the `amount` integer. I will attempt a logic
+   flaw by sending a negative value to reverse-transfer the money.</think>
+3. ACT: Emit a send_http_request tool call with your custom payload.
+4. FEEDBACK: The backend returns the raw status code and response body. READ IT.
+5. PIVOT: If you get a 500 with a stack trace, read the trace, identify which validation or
+   parser rejected you, adjust your syntax, and fire a newly crafted payload. A leaked stack
+   trace or an unhandled 500 is itself a finding worth verifying.
+
+Once you have triggered and understood an anomaly, use execute_safe_poc to confirm it, then
+generate_patch to remediate. Use query_hackclub to map service banners (from run_nmap) to
+known CVEs.
+
+GUARDRAILS (important):
+- You get at most THREE attack attempts per endpoint. If three crafted payloads against the
+  same endpoint fail to trigger an anomaly, the orchestrator will tell you that endpoint is
+  exhausted - do NOT keep hammering it. Move to the next route.
+- Watch the iteration counter; finish with {"action": "complete", ...} when no useful action
+  remains rather than looping pointlessly. This protects the token budget and the 120s gateway
+  timeout.
 
 Output rules (critical):
 - The final line of your reply must be a single valid JSON object.
 - Do NOT add any text after the JSON object.
 - Do NOT wrap the JSON in markdown fences.
-- If code analysis reports no source files (e.g. an unsupported language), rely on the \
-live DAST tools against the target instead of giving up."""
+- If code analysis reports no source files (e.g. an unsupported language), probe the live
+  target with send_http_request / run_fuzzer instead of giving up."""
 
 CORRECTION_PROMPT = (
     "Your previous reply could not be parsed. Respond with ONLY a single valid JSON "
@@ -70,10 +94,12 @@ class K2Agent:
             "target": context.get("target"),
             "code_analysis": context.get("code_analysis"),
             "attack_graph": context.get("attack_graph", {}),
+            "endpoint_attempts": context.get("endpoint_attempts", {}),
+            "exhausted_endpoints": context.get("exhausted_endpoints", []),
             "iteration": context.get("iteration", 0),
             "available_tools": [
-                "run_nmap", "run_fuzzer", "execute_safe_poc",
-                "query_hackclub", "generate_patch",
+                "run_nmap", "send_http_request", "run_fuzzer",
+                "execute_safe_poc", "query_hackclub", "generate_patch",
             ],
         }, indent=2)
 
@@ -148,6 +174,19 @@ class K2Agent:
         self.conversation_history.append({
             "role": "user",
             "content": f"Tool '{tool_name}' returned:\n{json.dumps(result, indent=2, default=str)}",
+        })
+
+    def feed_note(self, note: str) -> None:
+        """
+        Inject an orchestrator-authored note into the conversation history.
+
+        Used for guardrail messages (e.g. "endpoint X exhausted after 3
+        attempts, move on") so the agent's next decision is grounded in the
+        orchestrator's enforcement, not just its own reasoning.
+        """
+        self.conversation_history.append({
+            "role": "user",
+            "content": f"[ORCHESTRATOR] {note}",
         })
 
     # --- Response parsing -------------------------------------------------

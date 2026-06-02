@@ -127,6 +127,90 @@ class MCPClient:
             "anomalies_found": anomalies_found,
         }
 
+    async def send_http_request(
+        self,
+        method: str,
+        endpoint: str,
+        headers: dict | None = None,
+        json_body: dict | None = None,
+        params: dict | None = None,
+    ) -> dict:
+        """
+        Raw, low-level HTTP primitive for the cognitive red-team loop.
+
+        Unlike run_fuzzer (which runs a packaged payload sweep), this gives the
+        reasoning model a single, fully model-constructed request. The model
+        picks the method, endpoint, headers, query params and JSON body itself,
+        so it can craft a precise attack vector for a specific business-logic
+        flaw (e.g. a negative-amount transfer).
+
+        The response body is returned (truncated) so the model can READ what came
+        back -- crucially, any stack trace on a 500 -- and pivot its next payload
+        based on the actual server behaviour.
+        """
+        method = (method or "GET").upper()
+        allowed = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+        if method not in allowed:
+            return {
+                "error": f"Unsupported HTTP method: {method}",
+                "allowed_methods": sorted(allowed),
+            }
+
+        # Cap how much of the body we feed back into the context window so a
+        # large HTML page or trace can't blow the 60k token budget on its own.
+        max_body_chars = 4000
+
+        start_time = time.monotonic()
+        try:
+            async with httpx.AsyncClient(
+                timeout=30.0, follow_redirects=True
+            ) as client:
+                resp = await client.request(
+                    method,
+                    endpoint,
+                    headers=headers or None,
+                    json=json_body if json_body is not None else None,
+                    params=params or None,
+                )
+            elapsed_ms = (time.monotonic() - start_time) * 1000
+            body = resp.text or ""
+            truncated = len(body) > max_body_chars
+            body_snippet = body[:max_body_chars]
+
+            # Surface a server-side error and detect a leaked stack trace so the
+            # model is explicitly told it has something to pivot on.
+            is_server_error = resp.status_code >= 500
+            stack_trace_detected = _looks_like_stack_trace(body)
+
+            return {
+                "status_code": resp.status_code,
+                "response_headers": dict(resp.headers),
+                "body": body_snippet,
+                "body_truncated": truncated,
+                "response_length": len(body),
+                "response_time_ms": round(elapsed_ms, 2),
+                "is_server_error": is_server_error,
+                "stack_trace_detected": stack_trace_detected,
+                "transport_error": None,
+                "error": None,
+            }
+        except (httpx.TimeoutException, httpx.HTTPError) as e:
+            elapsed_ms = (time.monotonic() - start_time) * 1000
+            # A transport failure is NOT an application vulnerability. Report it
+            # plainly so the model doesn't mistake an unreachable host for a hit.
+            return {
+                "status_code": 0,
+                "response_headers": {},
+                "body": "",
+                "body_truncated": False,
+                "response_length": 0,
+                "response_time_ms": round(elapsed_ms, 2),
+                "is_server_error": False,
+                "stack_trace_detected": False,
+                "transport_error": type(e).__name__,
+                "error": f"Request failed: {e}",
+            }
+
     async def execute_safe_poc(
         self,
         sandbox_environment_id: str,
@@ -273,6 +357,37 @@ class MCPClient:
                 "mitigations": [],
                 "error": f"Hack Club Search request failed: {e}",
             }
+
+
+def _looks_like_stack_trace(body: str) -> bool:
+    """
+    Heuristic: does this response body contain a leaked stack trace / error?
+
+    Used by send_http_request to flag responses the model can pivot on. We look
+    for framework-agnostic markers seen in Python, PHP, Node and Java traces.
+    """
+    if not body:
+        return False
+    lowered = body.lower()
+    markers = (
+        "traceback (most recent call last)",
+        "stack trace",
+        "stacktrace",
+        "fatal error",
+        "uncaught exception",
+        "exception in thread",
+        "syntaxerror",
+        "operationalerror",
+        "sqlalchemy",
+        "psycopg2",
+        "sqlite3.",
+        "werkzeug",
+        'file "',  # Python trace frames: File "x.py", line N
+        "at java.",
+        "at org.",
+        "\n    at ",  # Node/Java indented frames
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def _parse_nmap_output(xml_output: str) -> list[dict]:

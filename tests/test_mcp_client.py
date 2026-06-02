@@ -245,3 +245,112 @@ async def test_run_fuzzer_flags_500_as_anomaly():
     assert result["anomalies_found"] == 1
     assert result["results"][0]["anomaly_detected"] is True
     assert result["results"][0]["status_code"] == 500
+
+
+
+async def test_send_http_request_returns_body():
+    """send_http_request returns the raw response body and status."""
+    client = MCPClient()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "<html>ok</html>"
+    mock_response.headers = {"content-type": "text/html"}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.send_http_request(
+            "GET", "http://target.local/", params={"q": "x"}
+        )
+
+    assert result["status_code"] == 200
+    assert result["body"] == "<html>ok</html>"
+    assert result["is_server_error"] is False
+    assert result["stack_trace_detected"] is False
+    assert result["transport_error"] is None
+
+
+async def test_send_http_request_detects_stack_trace():
+    """A 500 with a Python traceback is flagged for the agent to pivot on."""
+    client = MCPClient()
+
+    trace = (
+        "Traceback (most recent call last):\n"
+        '  File "app.py", line 42, in transfer\n'
+        "    sqlite3.OperationalError: no such column: abc\n"
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    mock_response.text = trace
+    mock_response.headers = {}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.send_http_request(
+            "POST", "http://target.local/transfer", json_body={"amount": -100}
+        )
+
+    assert result["status_code"] == 500
+    assert result["is_server_error"] is True
+    assert result["stack_trace_detected"] is True
+
+
+async def test_send_http_request_truncates_large_body():
+    """Large bodies are truncated to protect the token budget."""
+    client = MCPClient()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "A" * 10000
+    mock_response.headers = {}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.send_http_request("GET", "http://target.local/")
+
+    assert result["body_truncated"] is True
+    assert len(result["body"]) == 4000
+    assert result["response_length"] == 10000
+
+
+async def test_send_http_request_transport_error_not_anomaly():
+    """A connection failure is a transport error, not a server-side anomaly."""
+    import httpx
+
+    client = MCPClient()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(side_effect=httpx.ConnectTimeout("nope"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.send_http_request("GET", "https://unreachable.local/")
+
+    assert result["status_code"] == 0
+    assert result["is_server_error"] is False
+    assert result["stack_trace_detected"] is False
+    assert result["transport_error"] == "ConnectTimeout"
+
+
+async def test_send_http_request_rejects_bad_method():
+    """An unsupported HTTP method is rejected without making a request."""
+    client = MCPClient()
+    result = await client.send_http_request("FROBNICATE", "http://target.local/")
+    assert "Unsupported HTTP method" in result["error"]

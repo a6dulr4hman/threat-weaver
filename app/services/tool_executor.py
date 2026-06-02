@@ -22,6 +22,7 @@ class ToolExecutor:
         executors = {
             "run_nmap": self._exec_nmap,
             "run_fuzzer": self._exec_fuzzer,
+            "send_http_request": self._exec_send_http,
             "execute_safe_poc": self._exec_poc,
             "query_hackclub": self._exec_hackclub,
             "generate_patch": self._exec_patch,
@@ -46,6 +47,24 @@ class ToolExecutor:
         payloads = args.get("payloads", [{"param": "test", "value": "<script>alert(1)</script>"}])
         injection_type = args.get("injection_type", "query")
         return await self.mcp_client.run_fuzzer(url, payloads, injection_type)
+
+    async def _exec_send_http(self, args: dict) -> dict:
+        # Raw HTTP primitive: the model fully constructs the request. Accept a
+        # couple of common aliases for the body so minor key drift doesn't fail.
+        method = args.get("method", "GET")
+        endpoint = args.get("endpoint") or args.get("url", "")
+        headers = args.get("headers")
+        json_body = args.get("json_body")
+        if json_body is None:
+            json_body = args.get("body") or args.get("json")
+        params = args.get("params")
+        return await self.mcp_client.send_http_request(
+            method=method,
+            endpoint=endpoint,
+            headers=headers,
+            json_body=json_body,
+            params=params,
+        )
 
     async def _exec_poc(self, args: dict) -> dict:
         sandbox_id = args.get("sandbox_id", self.job_id)

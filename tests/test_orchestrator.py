@@ -612,3 +612,225 @@ async def test_k2_agent_api_error_stops_retrying():
     assert "403" in decision["detail"]
     # Should have called the API exactly once (no retry storm).
     assert mock_llm.chat.call_count == 1
+
+
+
+# --- Raw HTTP primitive routing ---
+
+
+async def test_tool_executor_send_http_request():
+    """ToolExecutor routes send_http_request to MCPClient with all fields."""
+    from app.services.tool_executor import ToolExecutor
+
+    mock_mcp = MagicMock()
+    mock_mcp.send_http_request = AsyncMock(return_value={"status_code": 200, "body": "ok"})
+
+    executor = ToolExecutor(job_id="test-job", mcp_client=mock_mcp)
+    result = await executor.execute("send_http_request", {
+        "method": "POST",
+        "endpoint": "http://t.local/transfer",
+        "headers": {"X-Test": "1"},
+        "json_body": {"amount": -100},
+        "params": {"debug": "1"},
+    })
+
+    mock_mcp.send_http_request.assert_called_once_with(
+        method="POST",
+        endpoint="http://t.local/transfer",
+        headers={"X-Test": "1"},
+        json_body={"amount": -100},
+        params={"debug": "1"},
+    )
+    assert result["status_code"] == 200
+
+
+async def test_tool_executor_send_http_request_url_alias():
+    """_exec_send_http accepts 'url' as an alias for 'endpoint' and 'body' for json."""
+    from app.services.tool_executor import ToolExecutor
+
+    mock_mcp = MagicMock()
+    mock_mcp.send_http_request = AsyncMock(return_value={"status_code": 200})
+
+    executor = ToolExecutor(job_id="test-job", mcp_client=mock_mcp)
+    await executor.execute("send_http_request", {
+        "method": "GET",
+        "url": "http://t.local/x",
+        "body": {"k": "v"},
+    })
+
+    _, kwargs = mock_mcp.send_http_request.call_args
+    assert kwargs["endpoint"] == "http://t.local/x"
+    assert kwargs["json_body"] == {"k": "v"}
+
+
+# --- Per-endpoint attack guardrails ---
+
+
+def _make_fsm():
+    fsm = OrchestratorFSM(db=MagicMock(), job_id="guardrail-job")
+    fsm.attack_graph = {}
+    return fsm
+
+
+def test_endpoint_key_strips_query():
+    """Same path with different query strings shares one budget."""
+    fsm = _make_fsm()
+    k1 = fsm._endpoint_key("send_http_request", {"endpoint": "http://t/transfer?a=1"})
+    k2 = fsm._endpoint_key("send_http_request", {"endpoint": "http://t/transfer?a=2"})
+    assert k1 == k2 == "http://t/transfer"
+
+
+def test_endpoint_key_none_for_non_attack_tool():
+    """Non-attack tools (e.g. run_nmap) are not endpoint-scoped."""
+    fsm = _make_fsm()
+    assert fsm._endpoint_key("run_nmap", {"target": "x.com"}) is None
+    assert fsm._endpoint_key("generate_patch", {"vuln_node": "v"}) is None
+
+
+def test_result_is_anomaly_signals():
+    """Server error, stack trace, or fuzzer anomaly all count as anomalies."""
+    fsm = _make_fsm()
+    assert fsm._result_is_anomaly({"is_server_error": True}) is True
+    assert fsm._result_is_anomaly({"stack_trace_detected": True}) is True
+    assert fsm._result_is_anomaly({"anomalies_found": 2}) is True
+    assert fsm._result_is_anomaly({"status_code": 200}) is False
+
+
+def test_record_attempt_exhausts_after_three():
+    """Three non-anomalous attempts mark the endpoint exhausted."""
+    fsm = _make_fsm()
+    ep = "http://t/login"
+
+    assert fsm._record_attempt(ep, was_anomaly=False) is not None  # attempt 1
+    assert not fsm._is_endpoint_exhausted(ep)
+    fsm._record_attempt(ep, was_anomaly=False)  # attempt 2
+    assert not fsm._is_endpoint_exhausted(ep)
+    note = fsm._record_attempt(ep, was_anomaly=False)  # attempt 3 -> exhausted
+    assert fsm._is_endpoint_exhausted(ep)
+    assert "exhausted" in note.lower()
+
+
+def test_record_attempt_anomaly_resets_counter():
+    """An anomaly resets the budget so the agent can keep pursuing the lead."""
+    fsm = _make_fsm()
+    ep = "http://t/search"
+
+    fsm._record_attempt(ep, was_anomaly=False)
+    fsm._record_attempt(ep, was_anomaly=False)
+    # Anomaly found -> reset
+    note = fsm._record_attempt(ep, was_anomaly=True)
+    assert note is None
+    assert fsm.attack_graph["endpoint_attempts"][ep] == 0
+    assert not fsm._is_endpoint_exhausted(ep)
+
+
+async def test_orchestrator_blocks_exhausted_endpoint(db_session):
+    """
+    Once an endpoint is exhausted, further attacks on it are blocked (no real
+    request) and the agent is nudged to move on. After 3 failed attempts the
+    4th is blocked, so the executor runs exactly 3 times.
+    """
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id, target_url="http://target.com",
+        verification_nonce="n", verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+    job = AnalysisJob(
+        id=job_id, workspace_id=workspace_id, status="ready", attack_graph_data={}
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # K2 always attacks the same endpoint with a benign (non-anomaly) result.
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "tool_call",
+        "tool": "send_http_request",
+        "arguments": {"method": "GET", "endpoint": "http://target.com/login"},
+        "reasoning": "probe login",
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    mock_mcp = MagicMock()
+    # Always a boring 200 -> never an anomaly -> budget gets consumed.
+    mock_mcp.send_http_request = AsyncMock(return_value={
+        "status_code": 200, "is_server_error": False,
+        "stack_trace_detected": False, "body": "ok",
+    })
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+    fsm.mcp_client = mock_mcp
+
+    with patch("app.services.k2_agent.MAX_ITERATIONS", 6):
+        await fsm.run_cycle()
+
+    # Executor should run only MAX_ATTACK_ATTEMPTS (3) times; later iterations
+    # are blocked before reaching the network.
+    assert mock_mcp.send_http_request.call_count == 3
+    assert "http://target.com/login" in fsm.attack_graph.get("exhausted_endpoints", [])
+    assert fsm.attack_graph.get("guardrail_notes")
+
+
+async def test_orchestrator_anomaly_avoids_exhaustion(db_session):
+    """If every attempt triggers an anomaly, the endpoint is never exhausted."""
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id, target_url="http://target.com",
+        verification_nonce="n", verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+    job = AnalysisJob(
+        id=job_id, workspace_id=workspace_id, status="ready", attack_graph_data={}
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "tool_call",
+        "tool": "send_http_request",
+        "arguments": {"method": "POST", "endpoint": "http://target.com/transfer"},
+        "reasoning": "logic flaw probe",
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    mock_mcp = MagicMock()
+    # Every request triggers a 500 stack trace -> anomaly -> counter resets.
+    mock_mcp.send_http_request = AsyncMock(return_value={
+        "status_code": 500, "is_server_error": True,
+        "stack_trace_detected": True, "body": "Traceback...",
+    })
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+    fsm.mcp_client = mock_mcp
+
+    with patch("app.services.k2_agent.MAX_ITERATIONS", 5):
+        await fsm.run_cycle()
+
+    # Never exhausted; all 5 iterations reach the network.
+    assert mock_mcp.send_http_request.call_count == 5
+    assert "http://target.com/transfer" not in fsm.attack_graph.get(
+        "exhausted_endpoints", []
+    )
+
+
+async def test_k2_agent_feed_note():
+    """feed_note injects an [ORCHESTRATOR] message into history."""
+    from app.services.k2_agent import K2Agent
+
+    agent = K2Agent(llm_client=MagicMock())
+    agent.feed_note("endpoint exhausted, move on")
+
+    assert len(agent.conversation_history) == 1
+    assert agent.conversation_history[0]["role"] == "user"
+    assert "[ORCHESTRATOR]" in agent.conversation_history[0]["content"]
+    assert "exhausted" in agent.conversation_history[0]["content"]
