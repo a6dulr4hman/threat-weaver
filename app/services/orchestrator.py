@@ -124,6 +124,7 @@ class OrchestratorFSM:
         # AST walking + filtering are CPU/IO bound; run off the event loop.
         analysis = await asyncio.to_thread(analyze_codebase, repo_dir)
         high_risk = await asyncio.to_thread(filter_high_risk_files, analysis)
+        counts = await asyncio.to_thread(self._count_repo_files, repo_dir)
 
         summary = []
         for item in high_risk:
@@ -135,11 +136,37 @@ class OrchestratorFSM:
                 {"file": rel_path, "findings": item.get("findings", [])}
             )
 
-        return {
+        context = {
             "repo_dir": repo_dir,
-            "files_scanned": len(analysis),
+            "total_files": counts["total"],
+            "python_files": counts["python"],
+            "high_risk_count": len(high_risk),
             "high_risk_files": summary,
         }
+
+        # Be honest about coverage: the AST/SAST layer is Python-only today.
+        if counts["python"] == 0:
+            context["note"] = (
+                "No Python source files were found in this repository. Static "
+                "code analysis (SAST) currently supports Python only, so no "
+                "code-level findings are available. Rely on the live DAST tools "
+                "(run_nmap, run_fuzzer, execute_safe_poc) against the target."
+            )
+        return context
+
+    @staticmethod
+    def _count_repo_files(repo_dir: str) -> dict:
+        """Count total files and Python files in the repo (excluding .git)."""
+        total = 0
+        python = 0
+        for root, dirs, files in os.walk(repo_dir):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            for filename in files:
+                total += 1
+                if filename.endswith(".py"):
+                    python += 1
+        return {"total": total, "python": python}
 
     async def run_cycle(self) -> FSMState:
         """

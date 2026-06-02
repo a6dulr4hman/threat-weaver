@@ -218,6 +218,94 @@ async def test_k2_agent_parse_markdown_json():
     assert decision["tool"] == "run_fuzzer"
 
 
+async def test_k2_agent_parse_think_block_then_json():
+    """K2Agent extracts JSON that follows a <think>...</think> reasoning block."""
+    from app.services.k2_agent import K2Agent
+
+    # This mirrors how K2-Think-v2 actually responds: reasoning prose, then JSON.
+    response = (
+        "<think>We have a given analysis state. The target is falak.me. "
+        "Current phase = ready. No files scanned yet, so I should begin with "
+        "reconnaissance to map the attack surface.</think>\n"
+        '{"action": "tool_call", "tool": "run_nmap", '
+        '"arguments": {"target": "falak.me", "port_range": "1-1024"}, '
+        '"reasoning": "Begin recon"}'
+    )
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=response)
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "ready", "target": "falak.me"})
+
+    assert decision["action"] == "tool_call"
+    assert decision["tool"] == "run_nmap"
+    assert decision["arguments"]["target"] == "falak.me"
+
+
+async def test_k2_agent_parse_prose_then_json():
+    """K2Agent extracts the trailing JSON even when preceded by plain prose."""
+    from app.services.k2_agent import K2Agent
+
+    response = (
+        "Alright, let me think about this. The target is example.com and we "
+        "haven't done recon yet. I'll start by scanning common ports.\n\n"
+        "Here is my decision:\n"
+        '{"action": "tool_call", "tool": "run_nmap", '
+        '"arguments": {"target": "example.com", "port_range": "1-1024"}}'
+    )
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=response)
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "ready", "target": "example.com"})
+
+    assert decision["action"] == "tool_call"
+    assert decision["tool"] == "run_nmap"
+
+
+async def test_k2_agent_prefers_final_json_object():
+    """When reasoning contains an example JSON, the trailing answer wins."""
+    from app.services.k2_agent import K2Agent
+
+    response = (
+        "<think>I could call something like "
+        '{"action": "tool_call", "tool": "query_hackclub"} but recon comes '
+        "first.</think>\n"
+        '{"action": "tool_call", "tool": "run_nmap", "arguments": {"target": "x.com"}}'
+    )
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=response)
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "ready", "target": "x.com"})
+
+    assert decision["action"] == "tool_call"
+    assert decision["tool"] == "run_nmap"
+
+
+async def test_k2_agent_retries_then_succeeds():
+    """K2Agent re-prompts after an unparseable reply and accepts the retry."""
+    from app.services.k2_agent import K2Agent
+
+    responses = iter([
+        "Hmm, I'm not sure yet, let me think more...",  # unparseable
+        '{"action": "tool_call", "tool": "run_nmap", "arguments": {"target": "x.com"}}',
+    ])
+
+    async def mock_chat(messages, role="general"):
+        return next(responses)
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(side_effect=mock_chat)
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "ready", "target": "x.com"})
+
+    assert decision["action"] == "tool_call"
+    assert decision["tool"] == "run_nmap"
+    assert mock_llm.chat.call_count == 2
+
+
 async def test_k2_agent_feed_result():
     """K2Agent.feed_result appends to conversation history."""
     from app.services.k2_agent import K2Agent
@@ -463,8 +551,10 @@ async def test_orchestrator_error_breaks_loop(db_session):
     # Should have stopped with an error recorded
     assert "k2_error" in fsm.attack_graph
     assert "Could not parse" in fsm.attack_graph["k2_error"]
-    # LLM was only called once (loop broke on error)
-    assert mock_llm.chat.call_count == 1
+    # The agent retries before giving up, so chat is called once per attempt
+    # (initial + MAX_PARSE_RETRIES). The orchestrator loop still breaks once.
+    from app.services.k2_agent import MAX_PARSE_RETRIES
+    assert mock_llm.chat.call_count == MAX_PARSE_RETRIES + 1
 
 
 async def test_orchestrator_complete_state_noop(db_session):
