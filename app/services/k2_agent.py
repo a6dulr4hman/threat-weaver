@@ -1,19 +1,23 @@
-"""K2-Think-v2 autonomous agent - the main reasoning driver.
-
-K2-Think-v2 is a long chain-of-thought reasoning model: it "thinks out loud"
-(often inside <think>...</think> tags) before producing a final answer. This
-module is built around that reality - it extracts the actionable JSON decision
-from a response that may be wrapped in reasoning prose, and retries with a
-corrective nudge when the model forgets to emit parseable JSON.
 """
+K2-Think-v2 Autonomous Agent - The Cognitive Reasoning Engine
+
+This module serves as the primary reasoning driver for the ThreatWeaver pipeline.
+It utilizes the K2-Think-v2 model to perform a continuous Chain-of-Thought (CoT)
+reasoning loop (ReAct). The agent is explicitly constrained to output actionable JSON
+tool requests after its internal <think> process, preventing infinite hallucination loops.
+"""
+
 import json
+from typing import Dict, Any
 
 from app.services.llm_client import LLMClient
 from app.services.llm_json import extract_json_object, is_api_error
 
+# Guardrails to protect against infinite loops and token exhaustion
 MAX_ITERATIONS = 20
 MAX_HISTORY_MESSAGES = 20
-# How many times to re-prompt K2 when its reply can't be parsed into a decision.
+
+# The number of times the orchestrator will nudge the LLM if it fails to output valid JSON
 MAX_PARSE_RETRIES = 2
 
 SYSTEM_PROMPT = """You are K2-Think-v2, the autonomous Cognitive Red Team agent that DRIVES \
@@ -70,6 +74,10 @@ GUARDRAILS (important):
 - Watch the iteration counter; finish with {"action": "complete", ...} when no
   useful action remains. This protects the token budget and 120s gateway timeout.
 
+CRITICAL SYSTEM DIRECTIVE: You are generating a patch for human review. You DO NOT have execution access to hot-reload or deploy code to the live target server. 
+
+Once you have generated the patch using the `generate_patch` tool, DO NOT attempt to verify the fix using `send_http_request` or any active network tools. The live server will still be vulnerable. After generating the patch, immediately output the string "PHASE_COMPLETE" to terminate the FSM loop.
+
 Output rules (critical):
 - The final line of your reply must be a single valid JSON object.
 - Do NOT add any text after the JSON object.
@@ -89,10 +97,13 @@ class K2Agent:
 
     def __init__(self, llm_client: LLMClient | None = None):
         self.llm_client = llm_client or LLMClient()
-        self.conversation_history: list[dict] = []
+        self.conversation_history: list[Dict[str, Any]] = []
 
-    def build_state_message(self, context: dict) -> str:
-        """Format current analysis state for K2."""
+    def build_state_message(self, context: Dict[str, Any]) -> str:
+        """
+        Hydrates the current state of the Finite State Machine (FSM) into a string 
+        format digestible by the LLM. 
+        """
         return json.dumps({
             "current_phase": context.get("phase", "ready"),
             "target": context.get("target"),
@@ -108,14 +119,16 @@ class K2Agent:
             ],
         }, indent=2)
 
-    async def decide(self, context: dict) -> dict:
+    async def decide(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Send current state to K2 and get its decision.
+        Send current state to K2 and await its reasoning and decision.
 
         Because K2 is a reasoning model that occasionally omits clean JSON, this
-        retries up to MAX_PARSE_RETRIES times with a corrective nudge before
-        giving up. Returns a parsed decision dict with an 'action' key, or
-        {"action": "error", ...} if parsing fails on every attempt.
+        method retries up to MAX_PARSE_RETRIES times with a corrective nudge before
+        yielding an error.
+        
+        Returns:
+            Dict containing the parsed decision (e.g., action, tool, arguments).
         """
         state_message = self.build_state_message(context)
 
@@ -138,10 +151,7 @@ class K2Agent:
             response = await self.llm_client.chat(attempt_messages, role="agent")
             final_response = response
 
-            # Infrastructure errors (403, timeouts, rate limits) come back as
-            # "Error: ..." strings from the LLM client. Re-prompting with a
-            # formatting nudge won't help and just burns the rate-limit budget,
-            # so surface a clear API error and stop retrying.
+            # Check for infrastructure errors (Cloudflare Gateway limits, 403s, etc.)
             if self._is_api_error(response):
                 decision = {
                     "action": "error",
@@ -152,15 +162,18 @@ class K2Agent:
 
             parsed = self._parse_decision(response)
             decision = parsed
+            
+            # If successfully parsed, exit the retry loop
             if parsed.get("action") != "error":
                 break
-            # Couldn't parse - nudge K2 to emit JSON only, then try again.
+                
+            # Formatting Failure: Nudge K2 to emit JSON only, then try again.
             attempt_messages = attempt_messages + [
                 {"role": "assistant", "content": response},
                 {"role": "user", "content": CORRECTION_PROMPT},
             ]
 
-        # Record this exchange in the rolling history (state + final response).
+        # Record this exchange in the rolling history to maintain context
         self.conversation_history.append(
             {"role": "user", "content": f"State: {state_message}"}
         )
@@ -168,14 +181,14 @@ class K2Agent:
             {"role": "assistant", "content": final_response}
         )
 
-        # Sliding window: keep only the last MAX_HISTORY_MESSAGES messages
+        # Truncate the sliding window to prevent exceeding the 60k token limit
         if len(self.conversation_history) > MAX_HISTORY_MESSAGES:
             self.conversation_history = self.conversation_history[-MAX_HISTORY_MESSAGES:]
 
         return decision
 
-    def feed_result(self, tool_name: str, result: dict) -> None:
-        """Feed tool execution results back into conversation history."""
+    def feed_result(self, tool_name: str, result: Dict[str, Any]) -> None:
+        """Injects the raw output of the MCP tool execution back into the LLM's memory."""
         self.conversation_history.append({
             "role": "user",
             "content": f"Tool '{tool_name}' returned:\n{json.dumps(result, indent=2, default=str)}",
@@ -183,28 +196,25 @@ class K2Agent:
 
     def feed_note(self, note: str) -> None:
         """
-        Inject an orchestrator-authored note into the conversation history.
-
-        Used for guardrail messages (e.g. "endpoint X exhausted after 3
-        attempts, move on") so the agent's next decision is grounded in the
-        orchestrator's enforcement, not just its own reasoning.
+        Injects a hard system directive into the conversation history.
+        Used primarily for FSM guardrails (e.g. "endpoint exhausted, forcing pivot").
         """
         self.conversation_history.append({
             "role": "user",
             "content": f"[ORCHESTRATOR] {note}",
         })
 
-    # --- Response parsing -------------------------------------------------
-
     @staticmethod
     def _is_api_error(response: str) -> bool:
         """True if the LLM client returned an infrastructure error string."""
         return is_api_error(response)
 
-    def _parse_decision(self, response: str) -> dict:
-        """Parse K2's (possibly reasoning-wrapped) response into a decision dict."""
+    def _parse_decision(self, response: str) -> Dict[str, Any]:
+        """Extracts and parses the final JSON payload, ignoring <think> reasoning blocks."""
         decision = extract_json_object(response, required_key="action")
         if decision is not None:
             return decision
+        
+        # If parsing fails entirely, grab a snippet for the error log
         snippet = response.strip()[:200]
         return {"action": "error", "detail": f"Could not parse K2 response: {snippet}"}
