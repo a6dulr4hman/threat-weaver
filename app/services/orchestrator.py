@@ -1,4 +1,4 @@
-"""FSM-based orchestrator with DB state hydration and token bucket."""
+"""FSM-based orchestrator with K2-Think-v2 agentic loop."""
 import asyncio
 from enum import Enum
 
@@ -95,94 +95,107 @@ class OrchestratorFSM:
         workspace = ws_result.scalar_one_or_none()
         return workspace.target_url if workspace else None
 
-    async def _run_recon(self) -> None:
-        """READY -> RECON: run nmap against the workspace target."""
-        target = await self._get_workspace_target()
-        if not target:
-            return
-        async with self._semaphore:
-            scan_results = await self.mcp_client.run_nmap(target, "1-1024")
-        self.attack_graph["recon"] = scan_results
-        self.transition(FSMState.RECON)
-
-    async def _run_dast(self) -> None:
-        """RECON -> DAST_TESTING: run fuzzer against discovered services."""
-        target = await self._get_workspace_target()
-        if not target:
-            self.transition(FSMState.DAST_TESTING)
-            return
-        # Build basic payload matrix from recon results
-        recon_data = self.attack_graph.get("recon", {})
-        services = recon_data.get("results", [])
-        payloads = [{"param": "test", "value": f"<script>alert({i})</script>"} for i in range(min(len(services), 5))]
-        if not payloads:
-            payloads = [{"param": "test", "value": "<script>alert(1)</script>"}]
-        async with self._semaphore:
-            fuzz_results = await self.mcp_client.run_fuzzer(
-                f"https://{target}", payloads, "query"
-            )
-        self.attack_graph["dast"] = fuzz_results
-        self.transition(FSMState.DAST_TESTING)
-
-    async def _run_poc_verification(self) -> None:
-        """DAST_TESTING -> POC_VERIFICATION: execute safe PoC for each finding."""
-        findings = self.attack_graph.get("dast", {}).get("results", [])
-        verified = []
-        for finding in findings:
-            if finding.get("anomaly_detected"):
-                async with self._semaphore:
-                    poc_result = await self.mcp_client.execute_safe_poc(
-                        sandbox_environment_id=self.job_id,
-                        script_payload="print('poc_marker')",
-                        expected_telemetry_signature={"marker": "poc_marker"},
-                    )
-                verified.append(poc_result)
-        self.attack_graph["poc_results"] = verified
-        self.transition(FSMState.POC_VERIFICATION)
-
-    async def _run_remediation(self) -> None:
-        """POC_VERIFICATION -> BLUE_TEAM_REMEDIATION: generate remediations."""
-        from app.services.remediation import RemediationService
-
-        remediation_svc = RemediationService(llm_client=self.llm_client)
-        poc_results = self.attack_graph.get("poc_results", [])
-        remediations = []
-        for poc in poc_results:
-            if poc.get("exploit_confirmed"):
-                async with self._semaphore:
-                    patch = await remediation_svc.generate_patch(
-                        job_id=self.job_id,
-                        vuln_node="verified_exploit",
-                        source_code=poc.get("trace", ""),
-                    )
-                remediations.append(patch)
-        self.attack_graph["remediations"] = remediations
-        self.transition(FSMState.BLUE_TEAM_REMEDIATION)
-
-    async def _finalize(self) -> None:
-        """BLUE_TEAM_REMEDIATION -> COMPLETE: mark analysis complete."""
-        self.transition(FSMState.COMPLETE)
-
     async def run_cycle(self) -> FSMState:
         """
-        Execute one FSM cycle:
+        K2-driven agentic loop:
         1. Hydrate state from DB
-        2. Based on current state, dispatch to appropriate phase handler
-        3. Save state back to DB
-        4. Return new state
+        2. Build context for K2
+        3. Loop: K2 decides -> execute -> feed back
+        4. Update FSM state based on accomplished work
+        5. Save to DB
         """
+        from app.services.k2_agent import K2Agent, MAX_ITERATIONS
+        from app.services.tool_executor import ToolExecutor
+
         await self.hydrate_state()
 
-        if self.state == FSMState.READY:
-            await self._run_recon()
-        elif self.state == FSMState.RECON:
-            await self._run_dast()
-        elif self.state == FSMState.DAST_TESTING:
-            await self._run_poc_verification()
-        elif self.state == FSMState.POC_VERIFICATION:
-            await self._run_remediation()
-        elif self.state == FSMState.BLUE_TEAM_REMEDIATION:
-            await self._finalize()
+        # If already complete, nothing to do
+        if self.state == FSMState.COMPLETE:
+            return self.state
+
+        target = await self._get_workspace_target()
+        agent = K2Agent(llm_client=self.llm_client)
+        executor = ToolExecutor(
+            job_id=self.job_id, mcp_client=self.mcp_client, llm_client=self.llm_client
+        )
+
+        for iteration in range(MAX_ITERATIONS):
+            context = {
+                "phase": self.state.value,
+                "target": target,
+                "attack_graph": self.attack_graph,
+                "iteration": iteration,
+            }
+
+            async with self._semaphore:
+                decision = await agent.decide(context)
+
+            action = decision.get("action")
+
+            if action == "complete":
+                # K2 says we're done - advance to COMPLETE
+                self.attack_graph["k2_summary"] = decision.get("summary", "")
+                self._advance_to_complete()
+                break
+            elif action == "tool_call":
+                tool_name = decision.get("tool", "")
+                arguments = decision.get("arguments", {})
+                result = await executor.execute(tool_name, arguments)
+                # Store result in attack graph
+                self.attack_graph.setdefault("tool_results", []).append({
+                    "iteration": iteration,
+                    "tool": tool_name,
+                    "arguments": arguments,
+                    "result": result,
+                    "reasoning": decision.get("reasoning", ""),
+                })
+                # Feed result back to K2
+                agent.feed_result(tool_name, result)
+                # Advance FSM state based on tool type
+                self._maybe_advance_state(tool_name)
+            elif action == "error":
+                # K2 response couldn't be parsed - break to avoid infinite loop
+                self.attack_graph["k2_error"] = decision.get("detail", "Unknown error")
+                break
+            else:
+                # Unknown action type
+                break
 
         await self.save_state()
         return self.state
+
+    def _advance_to_complete(self) -> None:
+        """Advance FSM to COMPLETE through valid transitions."""
+        state_chain = [
+            FSMState.RECON, FSMState.DAST_TESTING,
+            FSMState.POC_VERIFICATION, FSMState.BLUE_TEAM_REMEDIATION,
+            FSMState.COMPLETE,
+        ]
+        for next_state in state_chain:
+            if self.state == next_state:
+                continue
+            if not self.transition(next_state):
+                break
+
+    def _maybe_advance_state(self, tool_name: str) -> None:
+        """Advance FSM state based on what tool was just used."""
+        tool_to_min_state = {
+            "run_nmap": FSMState.RECON,
+            "run_fuzzer": FSMState.DAST_TESTING,
+            "execute_safe_poc": FSMState.POC_VERIFICATION,
+            "query_hackclub": FSMState.POC_VERIFICATION,
+            "generate_patch": FSMState.BLUE_TEAM_REMEDIATION,
+        }
+        target_state = tool_to_min_state.get(tool_name)
+        if target_state and target_state.value != self.state.value:
+            # Advance through valid transitions up to target
+            state_chain = [
+                FSMState.RECON, FSMState.DAST_TESTING,
+                FSMState.POC_VERIFICATION, FSMState.BLUE_TEAM_REMEDIATION,
+            ]
+            for next_state in state_chain:
+                if self.state == target_state:
+                    break
+                if next_state.value == self.state.value:
+                    continue
+                self.transition(next_state)

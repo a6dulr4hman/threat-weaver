@@ -1,6 +1,9 @@
-"""Tests for the orchestrator FSM service."""
+"""Tests for the orchestrator FSM service and K2 agentic loop."""
+import json
 import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -134,8 +137,6 @@ async def test_save_state(db_session):
 
 def test_deduplication():
     """Test that is_duplicate returns False first time, True second time."""
-    from unittest.mock import MagicMock
-
     fsm = OrchestratorFSM(db=MagicMock(), job_id="test-job-123")
 
     # First occurrence - not a duplicate
@@ -146,3 +147,358 @@ def test_deduplication():
     assert fsm.is_duplicate("file.py", "xss", 10) is False
     # Different line - not a duplicate
     assert fsm.is_duplicate("file.py", "sql_injection", 20) is False
+
+
+# --- K2 Agent Tests ---
+
+
+async def test_k2_agent_parse_tool_call():
+    """K2Agent parses a valid tool_call JSON response correctly."""
+    from app.services.k2_agent import K2Agent
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "tool_call",
+        "tool": "run_nmap",
+        "arguments": {"target": "example.com", "port_range": "1-1024"},
+        "reasoning": "Starting reconnaissance",
+    }))
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "ready", "target": "example.com"})
+
+    assert decision["action"] == "tool_call"
+    assert decision["tool"] == "run_nmap"
+    assert decision["arguments"]["target"] == "example.com"
+    assert decision["reasoning"] == "Starting reconnaissance"
+
+
+async def test_k2_agent_parse_complete():
+    """K2Agent parses a complete action response correctly."""
+    from app.services.k2_agent import K2Agent
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "complete",
+        "summary": "Found 2 XSS vulnerabilities and generated patches",
+    }))
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "blue_team_remediation", "target": "test.com"})
+
+    assert decision["action"] == "complete"
+    assert "XSS" in decision["summary"]
+
+
+async def test_k2_agent_parse_error():
+    """K2Agent returns error fallback when LLM returns garbage."""
+    from app.services.k2_agent import K2Agent
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value="This is not valid JSON at all!!!")
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "ready", "target": "test.com"})
+
+    assert decision["action"] == "error"
+    assert "Could not parse" in decision["detail"]
+
+
+async def test_k2_agent_parse_markdown_json():
+    """K2Agent handles JSON wrapped in markdown code blocks."""
+    from app.services.k2_agent import K2Agent
+
+    response_with_markdown = '```json\n{"action": "tool_call", "tool": "run_fuzzer", "arguments": {"url": "https://test.com"}, "reasoning": "testing"}\n```'
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=response_with_markdown)
+
+    agent = K2Agent(llm_client=mock_llm)
+    decision = await agent.decide({"phase": "recon", "target": "test.com"})
+
+    assert decision["action"] == "tool_call"
+    assert decision["tool"] == "run_fuzzer"
+
+
+async def test_k2_agent_feed_result():
+    """K2Agent.feed_result appends to conversation history."""
+    from app.services.k2_agent import K2Agent
+
+    agent = K2Agent(llm_client=MagicMock())
+    agent.feed_result("run_nmap", {"results": [{"port": 80}]})
+
+    assert len(agent.conversation_history) == 1
+    assert "run_nmap" in agent.conversation_history[0]["content"]
+    assert agent.conversation_history[0]["role"] == "user"
+
+
+# --- Tool Executor Tests ---
+
+
+async def test_tool_executor_run_nmap():
+    """ToolExecutor routes run_nmap to MCPClient correctly."""
+    from app.services.tool_executor import ToolExecutor
+
+    mock_mcp = MagicMock()
+    mock_mcp.run_nmap = AsyncMock(return_value={"error": None, "results": [{"port": 80}]})
+
+    executor = ToolExecutor(job_id="test-job", mcp_client=mock_mcp)
+    result = await executor.execute("run_nmap", {"target": "example.com", "port_range": "80-443"})
+
+    mock_mcp.run_nmap.assert_called_once_with("example.com", "80-443")
+    assert result["results"][0]["port"] == 80
+
+
+async def test_tool_executor_run_fuzzer():
+    """ToolExecutor routes run_fuzzer to MCPClient correctly."""
+    from app.services.tool_executor import ToolExecutor
+
+    mock_mcp = MagicMock()
+    mock_mcp.run_fuzzer = AsyncMock(return_value={"results": [], "anomalies_found": 0})
+
+    executor = ToolExecutor(job_id="test-job", mcp_client=mock_mcp)
+    result = await executor.execute("run_fuzzer", {
+        "url": "https://test.com",
+        "payloads": [{"param": "q", "value": "test"}],
+        "injection_type": "query",
+    })
+
+    mock_mcp.run_fuzzer.assert_called_once_with(
+        "https://test.com", [{"param": "q", "value": "test"}], "query"
+    )
+    assert result["anomalies_found"] == 0
+
+
+async def test_tool_executor_unknown_tool():
+    """ToolExecutor returns error for unknown tool names."""
+    from app.services.tool_executor import ToolExecutor
+
+    executor = ToolExecutor(job_id="test-job", mcp_client=MagicMock())
+    result = await executor.execute("nonexistent_tool", {})
+
+    assert "error" in result
+    assert "Unknown tool" in result["error"]
+    assert "available_tools" in result
+
+
+async def test_tool_executor_generate_patch():
+    """ToolExecutor routes generate_patch to RemediationService."""
+    from app.services.tool_executor import ToolExecutor
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value="fixed_code()")
+
+    executor = ToolExecutor(job_id="test-job", mcp_client=MagicMock(), llm_client=mock_llm)
+    result = await executor.execute("generate_patch", {
+        "vuln_node": "sql_injection",
+        "source_code": "query = f'SELECT * FROM users WHERE id={user_input}'",
+    })
+
+    assert result["vuln_node"] == "sql_injection"
+    assert result["patch"] == "fixed_code()"
+
+
+async def test_tool_executor_handles_exception():
+    """ToolExecutor catches exceptions from tool execution."""
+    from app.services.tool_executor import ToolExecutor
+
+    mock_mcp = MagicMock()
+    mock_mcp.run_nmap = AsyncMock(side_effect=RuntimeError("connection failed"))
+
+    executor = ToolExecutor(job_id="test-job", mcp_client=mock_mcp)
+    result = await executor.execute("run_nmap", {"target": "example.com"})
+
+    assert "error" in result
+    assert "connection failed" in result["error"]
+
+
+# --- Orchestrator Agentic Loop Tests ---
+
+
+async def test_orchestrator_agentic_loop(db_session):
+    """Orchestrator loop: K2 calls a tool then signals complete."""
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id,
+        target_url="https://target.com",
+        verification_nonce="nonce",
+        verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+
+    job = AnalysisJob(
+        id=job_id,
+        workspace_id=workspace_id,
+        status="ready",
+        attack_graph_data={},
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # Mock LLM to return tool_call first, then complete
+    call_count = 0
+
+    async def mock_chat(messages, role="general"):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return json.dumps({
+                "action": "tool_call",
+                "tool": "run_nmap",
+                "arguments": {"target": "target.com", "port_range": "1-1024"},
+                "reasoning": "Start with recon",
+            })
+        else:
+            return json.dumps({
+                "action": "complete",
+                "summary": "Scan complete, no critical vulns found",
+            })
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(side_effect=mock_chat)
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    mock_mcp = MagicMock()
+    mock_mcp.run_nmap = AsyncMock(return_value={"error": None, "results": [{"port": 443}]})
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+    fsm.mcp_client = mock_mcp
+
+    final_state = await fsm.run_cycle()
+
+    # Should have advanced to COMPLETE
+    assert final_state == FSMState.COMPLETE
+    # run_nmap should have been called
+    mock_mcp.run_nmap.assert_called_once_with("target.com", "1-1024")
+    # Attack graph should have results
+    assert "tool_results" in fsm.attack_graph
+    assert fsm.attack_graph["tool_results"][0]["tool"] == "run_nmap"
+    assert "k2_summary" in fsm.attack_graph
+
+
+async def test_orchestrator_agentic_loop_max_iterations(db_session):
+    """Orchestrator loop terminates after MAX_ITERATIONS."""
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id,
+        target_url="https://target.com",
+        verification_nonce="nonce",
+        verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+
+    job = AnalysisJob(
+        id=job_id,
+        workspace_id=workspace_id,
+        status="ready",
+        attack_graph_data={},
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # Mock LLM to always return tool_call (never complete)
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "tool_call",
+        "tool": "run_nmap",
+        "arguments": {"target": "target.com", "port_range": "1-100"},
+        "reasoning": "Keep scanning",
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    mock_mcp = MagicMock()
+    mock_mcp.run_nmap = AsyncMock(return_value={"error": None, "results": []})
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+    fsm.mcp_client = mock_mcp
+
+    with patch("app.services.k2_agent.MAX_ITERATIONS", 3):
+        final_state = await fsm.run_cycle()
+
+    # Should NOT be COMPLETE since K2 never said complete
+    assert final_state != FSMState.COMPLETE
+    # But should have executed exactly 3 iterations
+    assert mock_mcp.run_nmap.call_count == 3
+
+
+async def test_orchestrator_error_breaks_loop(db_session):
+    """Orchestrator loop stops on K2 parse error."""
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id,
+        target_url="https://target.com",
+        verification_nonce="nonce",
+        verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+
+    job = AnalysisJob(
+        id=job_id,
+        workspace_id=workspace_id,
+        status="ready",
+        attack_graph_data={},
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # Mock LLM to return unparseable garbage
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value="I don't know what to do, sorry!")
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+
+    final_state = await fsm.run_cycle()
+
+    # Should have stopped with an error recorded
+    assert "k2_error" in fsm.attack_graph
+    assert "Could not parse" in fsm.attack_graph["k2_error"]
+    # LLM was only called once (loop broke on error)
+    assert mock_llm.chat.call_count == 1
+
+
+async def test_orchestrator_complete_state_noop(db_session):
+    """Orchestrator does nothing if state is already COMPLETE."""
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id,
+        target_url="https://target.com",
+        verification_nonce="nonce",
+        verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+
+    job = AnalysisJob(
+        id=job_id,
+        workspace_id=workspace_id,
+        status="complete",
+        attack_graph_data={"done": True},
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock()
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+
+    final_state = await fsm.run_cycle()
+
+    assert final_state == FSMState.COMPLETE
+    # LLM should never have been called
+    mock_llm.chat.assert_not_called()
