@@ -1,5 +1,6 @@
 """Tests for the orchestrator FSM service and K2 agentic loop."""
 import json
+import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,7 +8,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models import AnalysisJob, RoutingConfig, Workspace
+from app.models import AnalysisJob, Workspace
 from app.services.orchestrator import FSMState, OrchestratorFSM, TRANSITIONS
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -512,10 +513,10 @@ async def test_orchestrator_agentic_loop_max_iterations(db_session):
     # Exactly 3 iterations executed (MAX_ITERATIONS cap).
     assert mock_mcp.run_nmap.call_count == 3
     # After the loop exhausts, the orchestrator ALWAYS finalizes: it forces the
-    # FSM to COMPLETE and records a notification outcome, so a stuck/looping run
-    # can never silently hang without an alert.
+    # FSM to COMPLETE and generates a report, so a stuck/looping run can never
+    # silently hang without output.
     assert final_state == FSMState.COMPLETE
-    assert "notification" in fsm.attack_graph
+    assert "report" in fsm.attack_graph
     assert fsm.attack_graph.get("overall_severity") is not None
 
 
@@ -895,7 +896,7 @@ def test_run_fuzzer_not_advertised_to_agent():
 
 
 
-# --- Phase 6: severity scoring + notification ---
+# --- Phase 6: severity scoring + report ---
 
 
 def test_score_severity_levels():
@@ -930,10 +931,8 @@ def test_score_severity_levels():
     assert fsm._score_severity() == "extreme"
 
 
-async def test_run_cycle_triggers_notification(db_session, monkeypatch):
-    """When K2 completes, the orchestrator scores severity and sends an alert."""
-    import app.services.notifier as notifier_mod
-
+async def test_run_cycle_generates_report(db_session, tmp_path):
+    """When K2 completes, the orchestrator scores severity and writes a PDF."""
     workspace_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
 
@@ -956,59 +955,26 @@ async def test_run_cycle_triggers_notification(db_session, monkeypatch):
     }))
     mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
 
-    # Make the notifier observably "send".
-    monkeypatch.setenv("RESEND_API_KEY", "re_test")
-    db_session.add(RoutingConfig(role="head_engineer", email_address="eng@corp.example"))
-    await db_session.commit()
-
     fsm = OrchestratorFSM(db=db_session, job_id=job_id)
     fsm.llm_client = mock_llm
 
-    with patch.object(
-        notifier_mod.resend.Emails, "send", return_value={"id": "email_xyz"}
-    ):
+    # Write the PDF into a temp dir so the test doesn't touch /tmp/threatweaver.
+    import app.services.report as report_mod
+
+    with patch.object(report_mod, "REPORT_DIR", str(tmp_path)):
         final_state = await fsm.run_cycle()
 
     assert final_state == FSMState.COMPLETE
-    notif = fsm.attack_graph.get("notification")
-    assert notif is not None
-    assert notif["status"] == "sent"
-    assert fsm.attack_graph.get("overall_severity") in {"low", "medium", "high", "extreme"}
-
-
-async def test_run_cycle_notification_skipped_visible(db_session, monkeypatch):
-    """With no API key, completion records a 'skipped' notification (not silent)."""
-    workspace_id = str(uuid.uuid4())
-    job_id = str(uuid.uuid4())
-
-    workspace = Workspace(
-        id=workspace_id, target_url="http://target.com",
-        verification_nonce="n", verification_status=True,
-    )
-    db_session.add(workspace)
-    await db_session.commit()
-    job = AnalysisJob(
-        id=job_id, workspace_id=workspace_id, status="ready", attack_graph_data={}
-    )
-    db_session.add(job)
-    await db_session.commit()
-
-    monkeypatch.delenv("RESEND_API_KEY", raising=False)
-
-    mock_llm = MagicMock()
-    mock_llm.chat = AsyncMock(return_value=json.dumps({
-        "action": "complete", "summary": "done",
-    }))
-    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
-
-    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
-    fsm.llm_client = mock_llm
-
-    await fsm.run_cycle()
-
-    notif = fsm.attack_graph.get("notification")
-    assert notif is not None
-    assert notif["status"] == "skipped"
+    report = fsm.attack_graph.get("report")
+    assert report is not None
+    assert report["status"] == "generated"
+    assert fsm.attack_graph.get("overall_severity") in {
+        "low", "medium", "high", "extreme"
+    }
+    # The PDF file actually exists and is a valid PDF.
+    assert os.path.exists(report["path"])
+    with open(report["path"], "rb") as f:
+        assert f.read(5) == b"%PDF-"
 
 
 
@@ -1121,13 +1087,13 @@ async def test_time_budget_forces_finalize(db_session):
 
     assert final_state == FSMState.COMPLETE
     assert "time_budget_exceeded" in fsm.attack_graph.get("stopped_reason", "")
-    assert "notification" in fsm.attack_graph
+    assert "report" in fsm.attack_graph
     # The model was never actually called because we were over budget instantly.
     mock_mcp.run_nmap.assert_not_called()
 
 
 async def test_error_exit_still_finalizes(db_session):
-    """A K2 parse error still produces a finalize + notification outcome."""
+    """A K2 parse error still produces a finalize + report outcome."""
     job_id = await _seed_ready_job(db_session)
 
     mock_llm = MagicMock()
@@ -1141,4 +1107,4 @@ async def test_error_exit_still_finalizes(db_session):
 
     assert final_state == FSMState.COMPLETE
     assert "k2_error" in fsm.attack_graph
-    assert "notification" in fsm.attack_graph
+    assert "report" in fsm.attack_graph

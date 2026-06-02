@@ -14,7 +14,7 @@ The system operates in 6 phases:
 2. **Reconnaissance** - Crawl the target using Cloudflare Browser Rendering to discover the attack surface
 3. **Attack Graph Generation** - Use LLM analysis to build a graph of potential vulnerability chains
 4. **Mitigation Generation** - Produce remediation code for each identified vulnerability node
-5. **Severity-Based Routing** - Route notifications to the appropriate team based on severity level
+5. **PDF Report** - Generate a downloadable PDF report with severity, findings, and full remediation code
 6. **Dashboard** - Visualize results with interactive attack graphs and mitigation details
 
 ## Setup
@@ -34,22 +34,11 @@ The system operates in 6 phases:
    uvicorn app.main:app --reload
    ```
 
-4. Seed email recipients (required for alert emails to be sent). The notifier
-   resolves recipients by the role keys `ciso`, `head_of_security`, and
-   `head_engineer`, so use the seed script rather than raw SQL with prettified
-   names:
-   ```bash
-   # Point every role at one inbox (quick demo):
-   python -m scripts.seed_routing --all you@yourdomain.com
-
-   # Or set roles individually:
-   python -m scripts.seed_routing \
-       --ciso ciso@yourdomain.com \
-       --head-of-security sec@yourdomain.com \
-       --head-engineer eng@yourdomain.com
-   ```
-   Also set `RESEND_FROM` in `.env` to an address on a domain verified in your
-   Resend account, or emails will not deliver.
+4. After a scan completes, download the PDF vulnerability report from the job
+   page ("Download PDF Report"), or directly via
+   `GET /api/jobs/{job_id}/report`. Reports are written to the directory set by
+   `REPORT_DIR` (default `/tmp/threatweaver/reports`) and regenerated on demand
+   if missing.
 
 ## Development
 

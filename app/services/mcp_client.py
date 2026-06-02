@@ -272,8 +272,7 @@ class MCPClient:
         # Create a restricted environment: remove sensitive variables
         safe_env = os.environ.copy()
         sensitive_keys = (
-            "SECRET_KEY", "CF_API_TOKEN", "CF_ACCOUNT_ID",
-            "RESEND_API_KEY", "DATABASE_URL",
+            "SECRET_KEY", "K2_API_KEY", "HACKCLUB_API_KEY", "DATABASE_URL",
         )
         for key in sensitive_keys:
             safe_env.pop(key, None)

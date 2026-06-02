@@ -1,6 +1,8 @@
+import os
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +10,7 @@ from app.database import async_session, get_db
 from app.models import AnalysisJob, Mitigation, Workspace
 from app.schemas import JobCreate, JobResponse, MitigationResponse
 from app.services.orchestrator import FSMState, OrchestratorFSM
+from app.services.report import ReportService
 from app.templating import templates
 
 api_router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -108,6 +111,40 @@ async def get_mitigations(job_id: str, db: AsyncSession = Depends(get_db)):
     )
     mitigations = result.scalars().all()
     return mitigations
+
+
+@api_router.get("/{job_id}/report")
+async def get_report(job_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Download the job's PDF vulnerability report.
+
+    Serves the file generated at finalize time. If it's missing (e.g. the
+    server was restarted and /tmp cleared), it is regenerated on demand from
+    the stored attack graph so the download always works for a finished job.
+    """
+    result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    report_svc = ReportService()
+    path = report_svc.report_path(job_id)
+    if not os.path.exists(path):
+        # Regenerate from whatever analysis data we have.
+        attack_graph = job.attack_graph_data or {}
+        severity = job.overall_severity or attack_graph.get("overall_severity") or "low"
+        if not attack_graph:
+            raise HTTPException(
+                status_code=409,
+                detail="No analysis data yet - run the scan before downloading a report.",
+            )
+        path = await report_svc.generate(db, job_id, severity, attack_graph)
+
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"threatweaver-report-{job_id[:8]}.pdf",
+    )
 
 
 @html_router.get("/{job_id}")

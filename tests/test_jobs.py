@@ -138,3 +138,51 @@ async def test_start_job_already_complete(client):
 
     response = await client.post(f"/api/jobs/{job_id}/start")
     assert response.status_code == 409
+
+
+
+@pytest.mark.asyncio
+async def test_report_job_not_found(client):
+    response = await client.get("/api/jobs/nonexistent-id/report")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_report_no_data_yet(client):
+    """A job with no analysis data can't produce a report (409)."""
+    job_id = await _create_verified_job(client)
+    response = await client.get(f"/api/jobs/{job_id}/report")
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_report_download_pdf(client):
+    """A finished job returns a downloadable PDF."""
+    job_id = await _create_verified_job(client)
+
+    # Give the job some analysis data so a report can be built.
+    from sqlalchemy import select
+
+    from app.models import AnalysisJob
+    from tests.conftest import test_async_session
+
+    async with test_async_session() as db:
+        result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
+        job = result.scalar_one()
+        job.status = "complete"
+        job.overall_severity = "medium"
+        job.attack_graph_data = {
+            "k2_summary": "Found a server crash on /login.",
+            "overall_severity": "medium",
+            "tool_results": [
+                {"tool": "send_http_request",
+                 "arguments": {"method": "POST", "endpoint": "http://t/login"},
+                 "result": {"is_server_error": True, "telemetry": "ReadError"}},
+            ],
+        }
+        await db.commit()
+
+    response = await client.get(f"/api/jobs/{job_id}/report")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content[:5] == b"%PDF-"

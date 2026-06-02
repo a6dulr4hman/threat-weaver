@@ -5,6 +5,6 @@ aiosqlite
 httpx
 jinja2
 python-multipart
-resend
+reportlab
 python-dotenv
 dnspython

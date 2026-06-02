@@ -3,8 +3,7 @@
 K2-Think-v2 is a reasoning model: it often "thinks out loud" (sometimes inside
 <think>...</think> tags) and emits the actionable JSON at the very end, possibly
 wrapped in markdown fences. These helpers extract a JSON object from such
-free-form replies. Used by both the K2 agent (tool decisions) and the notifier
-(recipient selection).
+free-form replies. Used by the K2 agent for parsing tool-call decisions.
 """
 import json
 import re
