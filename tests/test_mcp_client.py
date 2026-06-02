@@ -477,12 +477,12 @@ def test_evaluate_poc_explicit_negative_not_confirmed():
 
 
 def test_evaluate_poc_crash_marker_fallback():
-    """A clear exception in stderr confirms even if the JSON verdict is silent."""
+    """A server-error marker in stderr confirms even if the JSON verdict is silent."""
     from app.services.mcp_client import _evaluate_poc_output
 
     confirmed, detail = _evaluate_poc_output(
         '{"note": "ran"}',
-        "ConnectionResetError(54, 'Connection reset by peer')",
+        "Traceback (most recent call last):\n  ...\nOperationalError: DB crashed",
         {"server_crash": True},
     )
     assert confirmed is True

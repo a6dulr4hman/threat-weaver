@@ -284,11 +284,31 @@ class OrchestratorFSM:
                         continue
 
                     # Guardrail: bound remediation so the agent can't loop
-                    # forever on generate_patch (the failure that hung the
-                    # pipeline). Dedup by vuln_node and cap the total.
+                    # forever on generate_patch. Also enforce that patches are
+                    # only generated for findings that were actually observed
+                    # on this target — not invented from service banners.
                     if tool_name == "generate_patch":
                         patched = self.attack_graph.setdefault("patched_nodes", [])
                         vuln_node = (arguments.get("vuln_node") or "").strip()
+
+                        # Reject hallucinated patches: require at least one
+                        # tool_result entry that recorded a real anomaly
+                        # (server crash, stack trace, or confirmed PoC).
+                        # K2 sometimes reads "gunicorn" in nmap output and
+                        # immediately generates CVE patches without ever
+                        # triggering any anomaly on the live target.
+                        if not self._has_observed_finding():
+                            agent.feed_note(
+                                "generate_patch BLOCKED: no confirmed finding on "
+                                "this target. A patch is only justified after "
+                                "send_http_request or run_fuzzer returned "
+                                "is_server_error=true / server_crash_suspected=true, "
+                                "or execute_safe_poc returned exploit_confirmed=true. "
+                                "Do not patch based on service names or versions alone."
+                            )
+                            await self.save_state()
+                            continue
+
                         if vuln_node and vuln_node in patched:
                             agent.feed_note(
                                 f"'{vuln_node}' is already patched. Do not patch "
@@ -464,6 +484,11 @@ class OrchestratorFSM:
 
         try:
             report_svc = ReportService()
+            # Expire the session cache so _load_mitigations sees the rows that
+            # _store_mitigation committed earlier in the same scan loop.
+            # Without this, the SQLAlchemy identity map returns stale cached
+            # state and the mitigations list comes back empty.
+            self.db.expire_all()
             path = await report_svc.generate(
                 self.db, self.job_id, severity, self.attack_graph
             )
@@ -532,6 +557,34 @@ class OrchestratorFSM:
         """True if this endpoint has already hit the attack-attempt budget."""
         exhausted = self.attack_graph.get("exhausted_endpoints", [])
         return endpoint_key in exhausted
+
+    def _has_observed_finding(self) -> bool:
+        """
+        Return True only if the current scan has recorded at least one real,
+        network-observed anomaly on this target.
+
+        Used to gate generate_patch calls: K2 sometimes reads a service banner
+        (e.g. "gunicorn" or "OpenSSH") from nmap output and immediately proposes
+        patches for well-known CVEs without ever triggering those vulnerabilities
+        on the live target. This check refuses those hallucinated remediations.
+        """
+        for entry in self.attack_graph.get("tool_results", []):
+            result = entry.get("result") or {}
+            if not isinstance(result, dict):
+                continue
+            tool = entry.get("tool", "")
+            # A confirmed PoC is the strongest signal.
+            if tool == "execute_safe_poc" and result.get("exploit_confirmed"):
+                return True
+            # An observed server crash or stack trace from DAST.
+            if tool in ("send_http_request", "run_fuzzer") and (
+                result.get("is_server_error")
+                or result.get("stack_trace_detected")
+                or result.get("server_crash_suspected")
+                or result.get("anomalies_found", 0)
+            ):
+                return True
+        return False
 
     def _record_attempt(self, endpoint_key: str, was_anomaly: bool) -> str | None:
         """

@@ -482,14 +482,20 @@ def _evaluate_poc_output(
 
     # Common crash/exception markers - a clearly-present exception confirms the
     # backend mishandled the payload even if the JSON verdict didn't parse.
+    # NOTE: generic connection drops (ConnectionResetError, RemoteDisconnected)
+    # are intentionally excluded here — a sandboxed PoC script that simply
+    # connects to the target will see these on any transport failure, including
+    # perfectly normal ones. Only markers that indicate the SERVER itself
+    # produced an unhandled error are kept.
     crash_markers = (
-        "ConnectionResetError",
-        "Connection reset by peer",
-        "RemoteDisconnected",
-        "Connection aborted",
         "Traceback (most recent call last)",
         "500 Internal Server Error",
-        "server_crash",
+        "Unhandled exception",
+        "Internal Server Error",
+        "werkzeug",
+        "sqlalchemy.exc",
+        "OperationalError",
+        "ProgrammingError",
     )
     lowered = combined.lower()
     for marker in crash_markers:

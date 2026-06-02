@@ -1010,6 +1010,19 @@ async def test_generate_patch_dedup_blocks_repeat(db_session):
 
     fsm = OrchestratorFSM(db=db_session, job_id=job_id)
     fsm.llm_client = mock_llm
+    # Pre-seed a real observed anomaly in the DB so hydrate_state() restores it
+    # and _has_observed_finding() returns True for the hallucination guardrail.
+    observed_finding = [{
+        "tool": "send_http_request",
+        "result": {"is_server_error": True, "server_crash_suspected": True},
+    }]
+    from sqlalchemy import select
+    from app.models import AnalysisJob as _AJ
+    async with db_session.begin_nested():
+        r = await db_session.execute(select(_AJ).where(_AJ.id == job_id))
+        j = r.scalar_one()
+        j.attack_graph_data = {"tool_results": observed_finding}
+    await db_session.commit()
 
     patch_calls = 0
 
@@ -1030,7 +1043,39 @@ async def test_generate_patch_dedup_blocks_repeat(db_session):
     assert fsm.attack_graph.get("patched_nodes") == ["login_sqli"]
 
 
-async def test_generate_patch_budget_caps_total(db_session):
+async def test_generate_patch_blocked_without_observed_finding(db_session):
+    """generate_patch is blocked when no anomaly has been observed on the target."""
+    job_id = await _seed_ready_job(db_session)
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "tool_call", "tool": "generate_patch",
+        "arguments": {"vuln_node": "ssh_cve_2024_invented", "source_code": "x"},
+        "reasoning": "saw SSH 9.6p1 in nmap, generating a CVE patch",
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+    # No tool_results at all → _has_observed_finding() = False
+
+    from app.services import tool_executor as te_mod
+
+    patch_calls = 0
+
+    async def counting_execute(self, tool_name, arguments):
+        nonlocal patch_calls
+        if tool_name == "generate_patch":
+            patch_calls += 1
+        return {"patch": ""}
+
+    with patch.object(te_mod.ToolExecutor, "execute", counting_execute), \
+         patch("app.services.k2_agent.MAX_ITERATIONS", 3):
+        await fsm.run_cycle()
+
+    # generate_patch was blocked — the hallucination guardrail fired.
+    assert patch_calls == 0
+    assert "ssh_cve_2024_invented" not in fsm.attack_graph.get("patched_nodes", [])
     """No more than MAX_PATCHES distinct patches are generated."""
     from app.services.orchestrator import MAX_PATCHES
 
