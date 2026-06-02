@@ -179,7 +179,7 @@ class NotifierService:
             }
 
         from_addr = os.getenv(
-            "RESEND_FROM", "ThreatWeaver <alerts@threatweaver.dev>"
+            "RESEND_FROM", "ThreatWeaver <alerts@threat.falak.me>"
         )
         html_content = self.render_email(severity, attack_graph, job_id)
 
