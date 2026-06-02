@@ -19,25 +19,25 @@ html_router = APIRouter(prefix="/jobs", tags=["jobs-html"])
 # Outer-loop safety cap. Each run_cycle() runs the full K2 agentic loop
 # (up to MAX_ITERATIONS); we re-run a few times in case a cycle exits early
 # without reaching COMPLETE (e.g. a transient parse error).
-MAX_OUTER_CYCLES = 5
-
-
 async def _run_analysis_job(job_id: str) -> None:
     """
     Background task: drive the K2 orchestrator for a job to completion.
 
     Runs in its own DB session because the request-scoped session is closed
     once the HTTP response is returned.
+
+    Design notes:
+    - run_cycle() already contains the full agent loop, the time-budget
+      guardrail, AND _ensure_finalized() in a finally block. It always
+      returns FSMState.COMPLETE when it exits.
+    - We therefore run it exactly ONCE. The old multi-cycle loop was the
+      primary cause of 15-minute stalls: each 600s budget × 5 cycles = 50
+      minutes maximum, and the deadline check only fires between iterations,
+      so a single slow generate_patch call could eat the entire budget.
     """
     async with async_session() as db:
         fsm = OrchestratorFSM(db, job_id)
-        previous_state: str | None = None
-        for _ in range(MAX_OUTER_CYCLES):
-            state = await fsm.run_cycle()
-            # Stop when finished or when a cycle made no forward progress.
-            if state == FSMState.COMPLETE or state.value == previous_state:
-                break
-            previous_state = state.value
+        await fsm.run_cycle()
 
 
 @api_router.post("/", response_model=JobResponse, status_code=201)

@@ -36,9 +36,14 @@ ATTACK_TOOLS = {"send_http_request", "run_fuzzer"}
 # finishing - which also means the completion email never fires.
 MAX_PATCHES = 5
 
-# Hard wall-clock budget for a single run_cycle, in seconds. Comfortably under
-# typical background limits; protects against a slow reasoning model looping.
-DEFAULT_CYCLE_BUDGET_SECONDS = 600.0
+# Hard wall-clock budget for a single run_cycle, in seconds.
+# With K2's 30 rpm cap and 120s per-call timeout, 20 iterations realistically
+# takes 2-5 minutes. Setting this to 5 minutes gives headroom while preventing
+# a single stuck job from blocking the server for 10+ minutes.
+# Override with CYCLE_BUDGET_SECONDS env var if needed.
+DEFAULT_CYCLE_BUDGET_SECONDS = float(
+    os.getenv("CYCLE_BUDGET_SECONDS", "300")
+)
 
 
 class FSMState(str, Enum):
@@ -490,6 +495,9 @@ class OrchestratorFSM:
         The outcome is recorded in attack_graph["report"] (status + path) so the
         result is always visible in the job data and the UI can offer a download.
         """
+        import logging
+        _log = logging.getLogger(__name__)
+
         from app.services.report import ReportService
 
         severity = self._score_severity()
@@ -506,15 +514,20 @@ class OrchestratorFSM:
             report_svc = ReportService()
             # Expire the session cache so _load_mitigations sees the rows that
             # _store_mitigation committed earlier in the same scan loop.
-            # Without this, the SQLAlchemy identity map returns stale cached
-            # state and the mitigations list comes back empty.
             self.db.expire_all()
-            path = await report_svc.generate(
-                self.db, self.job_id, severity, self.attack_graph
+            # Enforce a hard timeout on PDF generation so a reportlab crash or
+            # hang can't block the background task indefinitely.
+            path = await asyncio.wait_for(
+                report_svc.generate(self.db, self.job_id, severity, self.attack_graph),
+                timeout=60.0,
             )
             status = {"status": "generated", "path": path, "severity": severity}
-        except Exception as e:  # never let report generation crash the job
+        except asyncio.TimeoutError:
+            status = {"status": "failed", "reason": "PDF generation timed out (60s)"}
+            _log.error("PDF generation timed out for job %s", self.job_id)
+        except Exception as e:
             status = {"status": "failed", "reason": f"Report generation failed: {e}"}
+            _log.exception("PDF generation failed for job %s", self.job_id)
 
         self.attack_graph["report"] = status
 
