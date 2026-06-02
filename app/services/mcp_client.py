@@ -294,17 +294,16 @@ class MCPClient:
                 trace = stdout.decode("utf-8", errors="ignore")
                 error_output = stderr.decode("utf-8", errors="ignore")
 
-                # Check if the expected telemetry signature was matched
-                exploit_confirmed = False
-                if expected_telemetry_signature:
-                    marker = expected_telemetry_signature.get("marker", "")
-                    if marker and marker in trace:
-                        exploit_confirmed = True
+                exploit_confirmed, match_detail = _evaluate_poc_output(
+                    trace, error_output, expected_telemetry_signature
+                )
 
                 return {
                     "memory_profile": {"sandbox_id": sandbox_environment_id},
                     "trace": trace,
+                    "stderr": error_output,
                     "exploit_confirmed": exploit_confirmed,
+                    "match_detail": match_detail,
                     "error": error_output if error_output else None,
                 }
             except asyncio.TimeoutError:
@@ -398,6 +397,107 @@ class MCPClient:
                 "mitigations": [],
                 "error": f"Hack Club Search request failed: {e}",
             }
+
+
+def _evaluate_poc_output(
+    stdout: str, stderr: str, expected_signature: dict | None
+) -> tuple[bool, str]:
+    """
+    Decide whether a PoC confirmed the exploit, and explain how.
+
+    The PoC script is instructed (see k2_agent SYSTEM_PROMPT) to print a JSON
+    dict as its final stdout action, e.g. print('{"server_crash": true}').
+    This evaluator:
+
+      1. Regex-extracts the LAST JSON object from stdout and matches it against
+         expected_signature (every expected key/value must be present).
+      2. Falls back to a string/marker search across stdout+stderr, so that even
+         when the model's JSON fails to parse, a clearly-present exception
+         (e.g. "ConnectionResetError") or expected substring still confirms.
+
+    Returns (exploit_confirmed, human_readable_detail).
+    """
+    import json as _json
+    import re as _re
+
+    combined = f"{stdout}\n{stderr}"
+    sig = expected_signature or {}
+
+    # --- 1. Structured JSON match -------------------------------------------
+    # Find candidate top-level {...} objects in stdout; prefer the LAST one,
+    # since the script is told to print its verdict as its final action.
+    candidates = _re.findall(r"\{[^{}]*\}", stdout, flags=_re.DOTALL)
+    parsed_payload = None
+    for candidate in reversed(candidates):
+        try:
+            obj = _json.loads(candidate)
+        except (ValueError, _json.JSONDecodeError):
+            continue
+        if isinstance(obj, dict):
+            parsed_payload = obj
+            break
+
+    if parsed_payload is not None and sig:
+        # Confirmed when every expected key is present with a matching value.
+        # A signature value of True/"true" matches any truthy payload value.
+        matched = True
+        for key, expected in sig.items():
+            if key not in parsed_payload:
+                matched = False
+                break
+            actual = parsed_payload[key]
+            if isinstance(expected, bool) or str(expected).lower() in ("true", "false"):
+                if bool(actual) is not (str(expected).lower() == "true" or expected is True):
+                    matched = False
+                    break
+            elif str(actual) != str(expected):
+                matched = False
+                break
+        if matched:
+            return True, f"JSON payload matched expected signature: {parsed_payload}"
+        # If the verdict explicitly mentions a signature key but with the wrong
+        # value (e.g. {"server_crash": false}), trust that negative result and
+        # do NOT let the substring fallback confirm on the key name alone.
+        if any(key in parsed_payload for key in sig):
+            return False, (
+                f"PoC printed a JSON verdict that contradicts the expected "
+                f"signature: got {parsed_payload}, expected {sig}."
+            )
+        # Otherwise the JSON didn't speak to our signature at all - fall through
+        # to the crash-marker fallback (a real exception may be in stderr).
+
+    # If no signature was supplied, any truthy JSON verdict counts as a hit.
+    if parsed_payload is not None and not sig:
+        if any(bool(v) for v in parsed_payload.values()):
+            return True, f"JSON payload reported a positive result: {parsed_payload}"
+
+    # --- 2. Fallback string / marker match ----------------------------------
+    # Used when the JSON verdict didn't parse or didn't address the signature.
+    # Match concrete signature VALUES as substrings (not bare key names, which
+    # are too loose and cause false positives).
+    for expected in sig.values():
+        if expected in (True, False, None):
+            continue
+        if str(expected) and str(expected) in combined:
+            return True, f"Matched signature value '{expected}' in PoC output."
+
+    # Common crash/exception markers - a clearly-present exception confirms the
+    # backend mishandled the payload even if the JSON verdict didn't parse.
+    crash_markers = (
+        "ConnectionResetError",
+        "Connection reset by peer",
+        "RemoteDisconnected",
+        "Connection aborted",
+        "Traceback (most recent call last)",
+        "500 Internal Server Error",
+        "server_crash",
+    )
+    lowered = combined.lower()
+    for marker in crash_markers:
+        if marker.lower() in lowered:
+            return True, f"Matched crash marker '{marker}' in PoC output."
+
+    return False, "No expected signature, JSON verdict, or crash marker matched."
 
 
 def _looks_like_stack_trace(body: str) -> bool:

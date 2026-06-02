@@ -34,6 +34,23 @@ The system operates in 6 phases:
    uvicorn app.main:app --reload
    ```
 
+4. Seed email recipients (required for alert emails to be sent). The notifier
+   resolves recipients by the role keys `ciso`, `head_of_security`, and
+   `head_engineer`, so use the seed script rather than raw SQL with prettified
+   names:
+   ```bash
+   # Point every role at one inbox (quick demo):
+   python -m scripts.seed_routing --all you@yourdomain.com
+
+   # Or set roles individually:
+   python -m scripts.seed_routing \
+       --ciso ciso@yourdomain.com \
+       --head-of-security sec@yourdomain.com \
+       --head-engineer eng@yourdomain.com
+   ```
+   Also set `RESEND_FROM` in `.env` to an address on a domain verified in your
+   Resend account, or emails will not deliver.
+
 ## Development
 
 Run tests:

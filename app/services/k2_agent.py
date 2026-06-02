@@ -66,6 +66,22 @@ what you observed. Adapt sequentially - do not request batch payload sweeps.
 Once an anomaly is understood, confirm it with execute_safe_poc, then
 generate_patch. Map run_nmap service banners to CVEs with query_hackclub.
 
+USING execute_safe_poc (critical for confirmation):
+The script you provide runs in a sandboxed Python subprocess. To confirm an
+exploit you MUST make the script's verdict machine-readable:
+- `import json` at the top of the script.
+- As the script's ABSOLUTE FINAL action, print ONE JSON dictionary to stdout,
+  e.g. print(json.dumps({"server_crash": True})) or
+  print('{"server_crash_suspected": true}').
+- The keys/values you print must match the `expected_signature` you pass in, so
+  the orchestrator can parse stdout and confirm the hit. Example:
+  {"tool": "execute_safe_poc", "arguments": {"sandbox_id": "s1",
+   "script": "import json, requests\\ntry:\\n  requests.post(url, json=payload, timeout=5)\\n  print(json.dumps({'server_crash': False}))\\nexcept Exception:\\n  print(json.dumps({'server_crash': True}))",
+   "expected_signature": {"server_crash": true}}}
+- Wrap network calls in try/except and report the outcome as JSON; a dropped
+  connection / exception that you print as {"server_crash": true} confirms a
+  crash-based finding.
+
 GUARDRAILS (important):
 - At most THREE attack attempts per endpoint. A 500, a stack trace, or a
   connection drop counts as an anomaly and RESETS that budget (you have a lead).

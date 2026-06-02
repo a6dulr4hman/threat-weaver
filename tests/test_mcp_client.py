@@ -449,3 +449,84 @@ async def test_run_fuzzer_connect_error_not_anomaly():
 
     assert result["anomalies_found"] == 0
     assert result["results"][0]["anomaly_detected"] is False
+
+
+
+# --- PoC JSON-output evaluation (flips exploit_confirmed) ---
+
+
+def test_evaluate_poc_json_signature_match():
+    """A printed JSON dict matching the expected signature confirms the exploit."""
+    from app.services.mcp_client import _evaluate_poc_output
+
+    confirmed, detail = _evaluate_poc_output(
+        'starting\n{"server_crash": true}', "", {"server_crash": True}
+    )
+    assert confirmed is True
+    assert "matched expected signature" in detail
+
+
+def test_evaluate_poc_explicit_negative_not_confirmed():
+    """An explicit {"server_crash": false} is trusted as a negative result."""
+    from app.services.mcp_client import _evaluate_poc_output
+
+    confirmed, _ = _evaluate_poc_output(
+        '{"server_crash": false}', "", {"server_crash": True}
+    )
+    assert confirmed is False
+
+
+def test_evaluate_poc_crash_marker_fallback():
+    """A clear exception in stderr confirms even if the JSON verdict is silent."""
+    from app.services.mcp_client import _evaluate_poc_output
+
+    confirmed, detail = _evaluate_poc_output(
+        '{"note": "ran"}',
+        "ConnectionResetError(54, 'Connection reset by peer')",
+        {"server_crash": True},
+    )
+    assert confirmed is True
+    assert "crash marker" in detail
+
+
+def test_evaluate_poc_no_signature_truthy_json():
+    """With no signature, any truthy JSON verdict counts as a hit."""
+    from app.services.mcp_client import _evaluate_poc_output
+
+    confirmed, _ = _evaluate_poc_output('{"crashed": true}', "", {})
+    assert confirmed is True
+
+
+def test_evaluate_poc_nothing_matches():
+    """Clean output with no marker and no matching JSON is not a confirmation."""
+    from app.services.mcp_client import _evaluate_poc_output
+
+    confirmed, _ = _evaluate_poc_output("all good", "", {"server_crash": True})
+    assert confirmed is False
+
+
+def test_evaluate_poc_prefers_last_json_object():
+    """The LAST printed JSON object (the final verdict) wins."""
+    from app.services.mcp_client import _evaluate_poc_output
+
+    out = '{"server_crash": false}\nretrying...\n{"server_crash": true}'
+    confirmed, _ = _evaluate_poc_output(out, "", {"server_crash": True})
+    assert confirmed is True
+
+
+async def test_execute_safe_poc_confirms_via_json():
+    """End-to-end: a script printing a matching JSON verdict flips confirmed."""
+    client = MCPClient()
+    script = "import json\nprint(json.dumps({'server_crash': True}))"
+    result = await client.execute_safe_poc("s1", script, {"server_crash": True})
+    assert result["exploit_confirmed"] is True
+    assert "match_detail" in result
+
+
+def test_system_prompt_teaches_poc_json_contract():
+    """The K2 prompt instructs printing a JSON verdict for execute_safe_poc."""
+    from app.services.k2_agent import SYSTEM_PROMPT
+
+    assert "execute_safe_poc" in SYSTEM_PROMPT
+    assert "json" in SYSTEM_PROMPT.lower()
+    assert "expected_signature" in SYSTEM_PROMPT
