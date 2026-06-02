@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nimbus CRM &middot; Sign in</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            color: #1e293b;
+        }
+        .card {
+            background: #fff; border-radius: 16px; padding: 40px;
+            width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+        .brand .logo {
+            width: 36px; height: 36px; border-radius: 9px;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            display: flex; align-items: center; justify-content: center;
+            color: #fff; font-weight: 700; font-size: 18px;
+        }
+        .brand h1 { font-size: 20px; color: #0f172a; }
+        .subtitle { color: #64748b; font-size: 13px; margin-bottom: 28px; }
+        label { display: block; font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 6px; }
+        input {
+            width: 100%; padding: 11px 13px; border: 1px solid #cbd5e1;
+            border-radius: 9px; font-size: 14px; margin-bottom: 18px;
+        }
+        input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+        button {
+            width: 100%; padding: 12px; border: none; border-radius: 9px;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: #fff;
+            font-size: 15px; font-weight: 600; cursor: pointer;
+        }
+        button:hover { opacity: 0.93; }
+        .error {
+            background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
+            padding: 10px 12px; border-radius: 9px; font-size: 13px; margin-bottom: 18px;
+        }
+        .foot { text-align: center; color: #94a3b8; font-size: 12px; margin-top: 22px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="brand">
+            <div class="logo">N</div>
+            <h1>Nimbus CRM</h1>
+        </div>
+        <p class="subtitle">Sign in to your workspace</p>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <form method="POST" action="/login">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" placeholder="you@company.com" autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
+            <button type="submit">Sign in</button>
+        </form>
+        <p class="foot">&copy; 2026 Nimbus CRM &middot; Internal use only</p>
+    </div>
+</body>
+</html>

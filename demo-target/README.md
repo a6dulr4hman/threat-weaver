@@ -1,79 +1,82 @@
-# ThreatWeaver Demo Target
+# Nimbus CRM (ThreatWeaver demo target)
 
-A **deliberately vulnerable** Flask app to showcase the ThreatWeaver scanner in
-a live demo. Its vulnerabilities are hand-picked to trigger findings in *both*
-halves of the scanner: static analysis (SAST) and active fuzzing (DAST).
+A small, realistic-looking customer relationship management app — login,
+customer dashboard, search, document export, admin diagnostics, and a report
+builder. It's used as the **scan target** for demonstrating ThreatWeaver.
 
-> ⚠️ **This app is intentionally insecure.** Run it only on a disposable VM you
-> control (e.g. a throwaway competition demo box) and tear it down afterwards.
-> Never expose it on a production network.
+Unlike an obvious "hack me" target, Nimbus CRM looks like an ordinary internal
+tool. The vulnerabilities are woven into normal features, so the demo shows the
+scanner discovering flaws in something that resembles a real product.
 
-## What it demonstrates
+> ⚠️ **Intentionally insecure.** The realistic features hide deliberate, common
+> security mistakes. Run it only on a disposable demo host you control, and tear
+> it down afterwards. Never put it on a production network.
 
-| Endpoint | Vulnerability | ThreatWeaver detector |
-|----------|---------------|-----------------------|
-| `/api/user?id=1` | SQL injection (f-string `.execute()`) | SAST `raw_sql` + DAST 500 |
-| `/api/search?q=alice` | SQL injection, error-leaking | SAST `raw_sql` + DAST 500 |
-| `/api/ping?host=127.0.0.1` | Command injection (`subprocess`, `shell=True`) | SAST `subprocess` |
-| `/api/whoami?label=x` | Command injection (`os.system`) | SAST `subprocess` |
-| `/api/calc?expr=1+1` | Code execution (`eval`) | SAST `code_execution` + DAST 500 |
-| `/api/file?name=motd.txt` | Path traversal (`open()`) | SAST `file_io` |
+## The app (what judges see)
 
-The SAST layer scores `vulnerable_app.py` at **risk 100** with 9 findings.
+| Page | Looks like | Hidden flaw | ThreatWeaver detector |
+|------|-----------|-------------|-----------------------|
+| `/login` | Sign-in form | SQL injection auth bypass (`admin' --`) | SAST `raw_sql` |
+| `/customers?q=` | Customer search | SQL injection (error-leaking) | SAST `raw_sql` + DAST 500 |
+| `/customer/<id>` | Account detail | SQL injection | SAST `raw_sql` + DAST 500 |
+| `/download?file=` | Document export | Path traversal | SAST `file_io` |
+| `/admin/diagnostics?host=` | Mail-host connectivity check | Command injection (`subprocess`) | SAST `subprocess` |
+| `/admin/backup?label=` | Trigger backup | Command injection (`os.system`) | SAST `subprocess` |
+| `/reports/compute?formula=` | Revenue formula builder | Code execution (`eval`) | SAST `code_execution` + DAST 500 |
+
+The SAST layer scores `app.py` at **risk 100** with 15 findings spanning
+`raw_sql`, `subprocess`, `code_execution`, and `file_io`.
+
+**Demo credentials:** `admin` / `S3cur3Adm1n!` (or `sales` / `letmein`).
+For the live show, the SQLi bypass `admin' --` with any password also logs in.
 
 ## Deploy it on your server (you run this, not me)
 
-I deliberately do **not** want your SSH credentials — you keep control of the
-box. On your demo VM:
+On your demo VM:
 
 ```bash
-# 1. Clone your repo (or just copy the demo-target/ folder over)
 git clone https://github.com/a6dulr4hman/threat-weaver.git
 cd threat-weaver/demo-target
-
-# 2. Run the one-shot deploy (installs a systemd service on port 8080)
 chmod +x deploy.sh
 sudo ./deploy.sh
 ```
 
-The script prints your public IP and the URL to point ThreatWeaver at. It's
-tuned for a 1 GB / 1 CPU box (single gunicorn worker, 256 MB memory cap).
+This installs Nimbus CRM as a systemd service on **port 80**, tuned for a
+1 GB / 1 CPU box (single gunicorn worker, 256 MB cap). It prints the public URL
+and login on completion. The app is then reachable at `http://<server-ip>/`.
 
 ### Open the firewall
 
-In the **Azure Portal → your VM → Networking → Network Security Group**, add an
-inbound rule allowing TCP **8080** (and 80/443 if you proxy it). Without this,
-the scanner can't reach the target from outside.
+In **Azure Portal → your VM → Networking → NSG**, add an inbound rule allowing
+TCP **80**. Without it, the scanner can't reach the target.
+
+## Routing: use DNS-only, not the Cloudflare proxy
+
+If you front this with `threatweaver.falak.dev`, set the DNS record to
+**DNS-only (grey cloud)**. The orange-cloud proxy would (a) make nmap scan
+Cloudflare's edge instead of your server, and (b) let Cloudflare's WAF block the
+exploit payloads before they reach the app — both of which break the demo.
 
 ## Run the showcase
 
-1. In ThreatWeaver, create a workspace targeting your server's IP or domain.
-2. **Domain verification** — pick one:
-   - **HTTP:** copy the nonce from the workspace, set it on the server, and
-     restart so `/threatweaver.txt` serves it:
-     ```bash
-     sudo sed -i "s/^Environment=TW_NONCE=.*/Environment=TW_NONCE=<paste-nonce>/" \
-       /etc/systemd/system/tw-demo-target.service
-     sudo systemctl daemon-reload && sudo systemctl restart tw-demo-target
-     ```
-   - **Shortcut for the demo:** set `MOCK_VERIFICATION=true` in ThreatWeaver to
-     auto-accept (already supported).
-3. Import the repo URL (`https://github.com/a6dulr4hman/threat-weaver`) — or a
-   repo containing `vulnerable_app.py` — so the SAST layer has Python to chew on.
+1. Create a ThreatWeaver workspace targeting your server IP or `threatweaver.falak.dev`.
+2. Verify the domain (set `TW_NONCE` in the service unit to serve
+   `/threatweaver.txt`, or use `MOCK_VERIFICATION=true` for the demo).
+3. Import a repo containing `app.py` so the Python SAST layer has code to analyze.
 4. Click **Start New Scan** and watch K2-Think-v2 drive recon → DAST → PoC →
    remediation live.
 
 ## Quick smoke test
 
 ```bash
-curl http://<server-ip>:8080/                       # endpoint listing
-curl "http://<server-ip>:8080/api/user?id=1"         # normal response
-curl "http://<server-ip>:8080/api/search?q=%27"      # -> HTTP 500 (anomaly)
+curl http://<server-ip>/login                                  # sign-in page (200)
+curl "http://<server-ip>/customer/abc"                          # -> 500 (SQLi anomaly)
+curl "http://<server-ip>/reports/compute?formula=__import__(1)" # -> 500 (eval anomaly)
 ```
 
 ## Tear it down after the demo
 
 ```bash
-sudo systemctl disable --now tw-demo-target
-sudo rm -rf /opt/tw-demo-target /etc/systemd/system/tw-demo-target.service
+sudo systemctl disable --now nimbus-crm
+sudo rm -rf /opt/nimbus-crm /etc/systemd/system/nimbus-crm.service
 ```
