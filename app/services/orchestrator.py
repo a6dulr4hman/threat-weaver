@@ -1,6 +1,7 @@
 """FSM-based orchestrator with K2-Think-v2 agentic loop."""
 import asyncio
 import os
+import time
 from enum import Enum
 
 from sqlalchemy import select
@@ -28,6 +29,16 @@ MAX_ATTACK_ATTEMPTS = 3
 # Tools that constitute an "attack attempt" against a specific endpoint and are
 # therefore subject to the per-endpoint budget above.
 ATTACK_TOOLS = {"send_http_request", "run_fuzzer"}
+
+# Cap on how many remediation patches a single job may generate. Without this,
+# the agent can loop forever on generate_patch (inventing a new vuln name each
+# time), burning the token budget and the gateway timeout without ever
+# finishing - which also means the completion email never fires.
+MAX_PATCHES = 5
+
+# Hard wall-clock budget for a single run_cycle, in seconds. Comfortably under
+# typical background limits; protects against a slow reasoning model looping.
+DEFAULT_CYCLE_BUDGET_SECONDS = 600.0
 
 
 class FSMState(str, Enum):
@@ -62,6 +73,7 @@ class OrchestratorFSM:
         self.mcp_client = MCPClient()
         self._semaphore = asyncio.Semaphore(5)  # Token bucket: max 5 concurrent LLM calls
         self._seen_hashes: set[str] = set()
+        self.cycle_budget_seconds = DEFAULT_CYCLE_BUDGET_SECONDS
 
     async def hydrate_state(self) -> None:
         """Load current state from analysis_jobs table."""
@@ -215,87 +227,145 @@ class OrchestratorFSM:
                 self.attack_graph["code_analysis"] = code_context
                 await self.save_state()
 
-        for iteration in range(MAX_ITERATIONS):
-            context = {
-                "phase": self.state.value,
-                "target": target,
-                "attack_graph": self.attack_graph,
-                "code_analysis": self.attack_graph.get("code_analysis"),
-                "routes": (self.attack_graph.get("code_analysis") or {}).get("routes", []),
-                "endpoint_attempts": self.attack_graph.get("endpoint_attempts", {}),
-                "exhausted_endpoints": self.attack_graph.get("exhausted_endpoints", []),
-                "iteration": iteration,
-            }
-
-            async with self._semaphore:
-                decision = await agent.decide(context)
-
-            action = decision.get("action")
-
-            if action == "complete":
-                # K2 says we're done - advance to COMPLETE
-                self.attack_graph["k2_summary"] = decision.get("summary", "")
-                self._advance_to_complete()
-                break
-            elif action == "tool_call":
-                tool_name = decision.get("tool", "")
-                arguments = decision.get("arguments", {})
-
-                # Guardrail: refuse further attacks on an exhausted endpoint and
-                # nudge the agent to pivot, without spending a real request.
-                endpoint_key = self._endpoint_key(tool_name, arguments)
-                if endpoint_key and self._is_endpoint_exhausted(endpoint_key):
-                    note = (
-                        f"Blocked: endpoint '{endpoint_key}' already hit the "
-                        f"{MAX_ATTACK_ATTEMPTS}-attempt limit. Choose a different "
-                        "endpoint or finish."
-                    )
-                    self.attack_graph.setdefault("guardrail_notes", []).append({
-                        "iteration": iteration,
-                        "endpoint": endpoint_key,
-                        "note": note,
-                    })
-                    agent.feed_note(note)
-                    await self.save_state()
-                    continue
-
-                result = await executor.execute(tool_name, arguments)
-                # Store result in attack graph
-                self.attack_graph.setdefault("tool_results", []).append({
-                    "iteration": iteration,
-                    "tool": tool_name,
-                    "arguments": arguments,
-                    "result": result,
-                    "reasoning": decision.get("reasoning", ""),
-                })
-                # Feed result back to K2
-                agent.feed_result(tool_name, result)
-
-                # Per-endpoint attack budget: count the attempt, and if the
-                # endpoint is now exhausted (or just short of it), tell the agent.
-                if endpoint_key:
-                    was_anomaly = self._result_is_anomaly(result)
-                    note = self._record_attempt(endpoint_key, was_anomaly)
-                    if note:
-                        agent.feed_note(note)
-
-                # Advance FSM state based on tool type
-                self._maybe_advance_state(tool_name)
-                # Checkpoint after each tool execution to prevent data loss
+        # Phase 1: ingest the cloned repo's source (once per job) so K2 can
+        # reason about high-risk files rather than scanning blind.
+        if "code_analysis" not in self.attack_graph:
+            code_context = await self._ingest_code_context()
+            if code_context is not None:
+                self.attack_graph["code_analysis"] = code_context
                 await self.save_state()
-            elif action == "error":
-                # K2 response couldn't be parsed - break to avoid infinite loop
-                self.attack_graph["k2_error"] = decision.get("detail", "Unknown error")
-                break
-            else:
-                # Unknown action type
-                break
 
-        # Phase 6: if the analysis finished, score severity and send the alert.
-        if self.state == FSMState.COMPLETE and not self.attack_graph.get(
-            "notification"
-        ):
-            await self._finalize_and_notify()
+        deadline = time.monotonic() + self.cycle_budget_seconds
+        try:
+            for iteration in range(MAX_ITERATIONS):
+                # Wall-clock guardrail: a slow reasoning model (30 rpm, 120s per
+                # call) can otherwise run far longer than any caller expects.
+                # Stop cleanly and let the finally block finalize + notify.
+                if time.monotonic() >= deadline:
+                    self.attack_graph["stopped_reason"] = (
+                        "time_budget_exceeded after "
+                        f"{int(self.cycle_budget_seconds)}s"
+                    )
+                    break
+
+                context = {
+                    "phase": self.state.value,
+                    "target": target,
+                    "attack_graph": self.attack_graph,
+                    "code_analysis": self.attack_graph.get("code_analysis"),
+                    "routes": (self.attack_graph.get("code_analysis") or {}).get("routes", []),
+                    "endpoint_attempts": self.attack_graph.get("endpoint_attempts", {}),
+                    "exhausted_endpoints": self.attack_graph.get("exhausted_endpoints", []),
+                    "iteration": iteration,
+                }
+
+                async with self._semaphore:
+                    decision = await agent.decide(context)
+
+                action = decision.get("action")
+
+                if action == "complete":
+                    # K2 says we're done - advance to COMPLETE
+                    self.attack_graph["k2_summary"] = decision.get("summary", "")
+                    self._advance_to_complete()
+                    break
+                elif action == "tool_call":
+                    tool_name = decision.get("tool", "")
+                    arguments = decision.get("arguments", {})
+
+                    # Guardrail: refuse further attacks on an exhausted endpoint
+                    # and nudge the agent to pivot, without spending a request.
+                    endpoint_key = self._endpoint_key(tool_name, arguments)
+                    if endpoint_key and self._is_endpoint_exhausted(endpoint_key):
+                        note = (
+                            f"Blocked: endpoint '{endpoint_key}' already hit the "
+                            f"{MAX_ATTACK_ATTEMPTS}-attempt limit. Choose a "
+                            "different endpoint or finish."
+                        )
+                        self.attack_graph.setdefault("guardrail_notes", []).append({
+                            "iteration": iteration,
+                            "endpoint": endpoint_key,
+                            "note": note,
+                        })
+                        agent.feed_note(note)
+                        await self.save_state()
+                        continue
+
+                    # Guardrail: bound remediation so the agent can't loop
+                    # forever on generate_patch (the failure that hung the
+                    # pipeline). Dedup by vuln_node and cap the total.
+                    if tool_name == "generate_patch":
+                        patched = self.attack_graph.setdefault("patched_nodes", [])
+                        vuln_node = (arguments.get("vuln_node") or "").strip()
+                        if vuln_node and vuln_node in patched:
+                            agent.feed_note(
+                                f"'{vuln_node}' is already patched. Do not patch "
+                                "it again - move to a new finding or finish with "
+                                'action "complete".'
+                            )
+                            await self.save_state()
+                            continue
+                        if len(patched) >= MAX_PATCHES:
+                            agent.feed_note(
+                                f"Remediation budget reached ({MAX_PATCHES} "
+                                "patches). Stop generating patches and finish "
+                                'with action "complete".'
+                            )
+                            await self.save_state()
+                            continue
+
+                    result = await executor.execute(tool_name, arguments)
+                    # Store result in attack graph
+                    self.attack_graph.setdefault("tool_results", []).append({
+                        "iteration": iteration,
+                        "tool": tool_name,
+                        "arguments": arguments,
+                        "result": result,
+                        "reasoning": decision.get("reasoning", ""),
+                    })
+                    # Feed result back to K2
+                    agent.feed_result(tool_name, result)
+
+                    # Record a successfully patched node (dedup + budget above)
+                    # and persist the remediation to the mitigations table.
+                    if tool_name == "generate_patch" and not result.get("error"):
+                        vuln_node = (arguments.get("vuln_node") or "").strip()
+                        if vuln_node:
+                            self.attack_graph.setdefault(
+                                "patched_nodes", []
+                            ).append(vuln_node)
+                            await self._store_mitigation(
+                                vuln_node, result.get("patch", "")
+                            )
+
+                    # Per-endpoint attack budget: count the attempt; if the
+                    # endpoint is now exhausted (or close), tell the agent.
+                    if endpoint_key:
+                        was_anomaly = self._result_is_anomaly(result)
+                        note = self._record_attempt(endpoint_key, was_anomaly)
+                        if note:
+                            agent.feed_note(note)
+
+                    # Advance FSM state based on tool type
+                    self._maybe_advance_state(tool_name)
+                    # Checkpoint after each tool execution to prevent data loss
+                    await self.save_state()
+                elif action == "error":
+                    # K2 response couldn't be parsed - break to avoid an
+                    # infinite loop.
+                    self.attack_graph["k2_error"] = decision.get(
+                        "detail", "Unknown error"
+                    )
+                    break
+                else:
+                    # Unknown action type
+                    break
+        finally:
+            # ALWAYS finalize: score severity and send the alert, regardless of
+            # HOW the loop ended (complete, error, time budget, max iterations,
+            # or an unexpected exception). This guarantees an email/outcome is
+            # produced for every run - the bug that left jobs silently hung.
+            await self._ensure_finalized()
 
         await self.save_state()
         return self.state
@@ -350,6 +420,35 @@ class OrchestratorFSM:
         if anomalies >= 1:
             return "medium"
         return "low"
+
+    async def _ensure_finalized(self) -> None:
+        """
+        Finalize the job on ANY loop exit (complete / error / timeout / max
+        iterations / exception), exactly once.
+
+        This is the safety net that guarantees a severity score and an alert
+        outcome are always produced - the gap that previously left a stuck job
+        with no email. It also forces the FSM to COMPLETE so the outer driver
+        loop in the jobs router stops re-running a finished job.
+        """
+        if self.attack_graph.get("notification"):
+            return  # already finalized in this or a prior cycle
+        # Drive the FSM to COMPLETE regardless of where it stalled.
+        if self.state != FSMState.COMPLETE:
+            self._advance_to_complete()
+        await self._finalize_and_notify()
+
+    async def _store_mitigation(self, vuln_node: str, patch: str) -> None:
+        """Persist a generated patch to the mitigations table (best-effort)."""
+        from app.services.remediation import RemediationService
+
+        cleaned = RemediationService.clean_patch(patch)
+        try:
+            svc = RemediationService(llm_client=self.llm_client)
+            await svc.store_mitigation(self.db, self.job_id, vuln_node, cleaned)
+        except Exception:
+            # Storage failure must not crash the analysis loop.
+            pass
 
     async def _finalize_and_notify(self) -> None:
         """

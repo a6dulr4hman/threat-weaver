@@ -509,10 +509,14 @@ async def test_orchestrator_agentic_loop_max_iterations(db_session):
     with patch("app.services.k2_agent.MAX_ITERATIONS", 3):
         final_state = await fsm.run_cycle()
 
-    # Should NOT be COMPLETE since K2 never said complete
-    assert final_state != FSMState.COMPLETE
-    # But should have executed exactly 3 iterations
+    # Exactly 3 iterations executed (MAX_ITERATIONS cap).
     assert mock_mcp.run_nmap.call_count == 3
+    # After the loop exhausts, the orchestrator ALWAYS finalizes: it forces the
+    # FSM to COMPLETE and records a notification outcome, so a stuck/looping run
+    # can never silently hang without an alert.
+    assert final_state == FSMState.COMPLETE
+    assert "notification" in fsm.attack_graph
+    assert fsm.attack_graph.get("overall_severity") is not None
 
 
 async def test_orchestrator_error_breaks_loop(db_session):
@@ -1005,3 +1009,136 @@ async def test_run_cycle_notification_skipped_visible(db_session, monkeypatch):
     notif = fsm.attack_graph.get("notification")
     assert notif is not None
     assert notif["status"] == "skipped"
+
+
+
+# --- Regression: generate_patch loop guardrail + guaranteed finalize ---
+
+
+async def _seed_ready_job(db_session):
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+    db_session.add(Workspace(
+        id=workspace_id, target_url="http://target.com",
+        verification_nonce="n", verification_status=True,
+    ))
+    await db_session.commit()
+    db_session.add(AnalysisJob(
+        id=job_id, workspace_id=workspace_id, status="ready", attack_graph_data={},
+    ))
+    await db_session.commit()
+    return job_id
+
+
+async def test_generate_patch_dedup_blocks_repeat(db_session):
+    """Patching the same vuln_node twice is blocked (no second execution)."""
+    job_id = await _seed_ready_job(db_session)
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "tool_call", "tool": "generate_patch",
+        "arguments": {"vuln_node": "login_sqli", "source_code": "x = 1"},
+        "reasoning": "patch it",
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+
+    patch_calls = 0
+
+    from app.services import tool_executor as te_mod
+
+    async def counting_execute(self, tool_name, arguments):
+        nonlocal patch_calls
+        if tool_name == "generate_patch":
+            patch_calls += 1
+        return {"patch": "def safe(): pass", "vuln_node": arguments.get("vuln_node")}
+
+    with patch.object(te_mod.ToolExecutor, "execute", counting_execute), \
+         patch("app.services.k2_agent.MAX_ITERATIONS", 6):
+        await fsm.run_cycle()
+
+    # Same vuln_node requested every iteration, but only patched ONCE.
+    assert patch_calls == 1
+    assert fsm.attack_graph.get("patched_nodes") == ["login_sqli"]
+
+
+async def test_generate_patch_budget_caps_total(db_session):
+    """No more than MAX_PATCHES distinct patches are generated."""
+    from app.services.orchestrator import MAX_PATCHES
+
+    job_id = await _seed_ready_job(db_session)
+
+    # Each iteration asks to patch a NEW vuln node.
+    counter = {"i": 0}
+
+    async def mock_chat(messages, role="general"):
+        counter["i"] += 1
+        return json.dumps({
+            "action": "tool_call", "tool": "generate_patch",
+            "arguments": {"vuln_node": f"vuln_{counter['i']}", "source_code": "x"},
+        })
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(side_effect=mock_chat)
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    from app.services import tool_executor as te_mod
+
+    async def fake_execute(self, tool_name, arguments):
+        return {"patch": "def safe(): pass", "vuln_node": arguments.get("vuln_node")}
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+
+    with patch.object(te_mod.ToolExecutor, "execute", fake_execute), \
+         patch("app.services.k2_agent.MAX_ITERATIONS", 20):
+        await fsm.run_cycle()
+
+    assert len(fsm.attack_graph.get("patched_nodes", [])) <= MAX_PATCHES
+
+
+async def test_time_budget_forces_finalize(db_session):
+    """Exceeding the wall-clock budget stops the loop and still finalizes."""
+    job_id = await _seed_ready_job(db_session)
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "tool_call", "tool": "run_nmap",
+        "arguments": {"target": "target.com"},
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+    mock_mcp = MagicMock()
+    mock_mcp.run_nmap = AsyncMock(return_value={"error": None, "results": []})
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+    fsm.mcp_client = mock_mcp
+    fsm.cycle_budget_seconds = 0.0  # already over budget on first check
+
+    final_state = await fsm.run_cycle()
+
+    assert final_state == FSMState.COMPLETE
+    assert "time_budget_exceeded" in fsm.attack_graph.get("stopped_reason", "")
+    assert "notification" in fsm.attack_graph
+    # The model was never actually called because we were over budget instantly.
+    mock_mcp.run_nmap.assert_not_called()
+
+
+async def test_error_exit_still_finalizes(db_session):
+    """A K2 parse error still produces a finalize + notification outcome."""
+    job_id = await _seed_ready_job(db_session)
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value="totally not json")
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+
+    final_state = await fsm.run_cycle()
+
+    assert final_state == FSMState.COMPLETE
+    assert "k2_error" in fsm.attack_graph
+    assert "notification" in fsm.attack_graph
