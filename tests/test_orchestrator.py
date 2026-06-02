@@ -7,7 +7,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import Base
-from app.models import AnalysisJob, Workspace
+from app.models import AnalysisJob, RoutingConfig, Workspace
 from app.services.orchestrator import FSMState, OrchestratorFSM, TRANSITIONS
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -888,3 +888,120 @@ def test_run_fuzzer_not_advertised_to_agent():
     assert "/login" in msg
     # The system prompt no longer offers run_fuzzer as a tool option.
     assert "run_fuzzer" not in SYSTEM_PROMPT
+
+
+
+# --- Phase 6: severity scoring + notification ---
+
+
+def test_score_severity_levels():
+    """_score_severity maps anomaly/exploit counts onto severity tiers."""
+    fsm = OrchestratorFSM(db=MagicMock(), job_id="sev-job")
+
+    # No findings -> low
+    fsm.attack_graph = {"tool_results": []}
+    assert fsm._score_severity() == "low"
+
+    # One anomaly -> medium
+    fsm.attack_graph = {"tool_results": [
+        {"tool": "send_http_request", "result": {"is_server_error": True}},
+    ]}
+    assert fsm._score_severity() == "medium"
+
+    # Three anomalies -> high
+    fsm.attack_graph = {"tool_results": [
+        {"tool": "send_http_request", "result": {"is_server_error": True}},
+        {"tool": "send_http_request", "result": {"stack_trace_detected": True}},
+        {"tool": "run_fuzzer", "result": {"anomalies_found": 2}},
+    ]}
+    assert fsm._score_severity() == "high"
+
+    # Confirmed exploit + several anomalies -> extreme
+    fsm.attack_graph = {"tool_results": [
+        {"tool": "execute_safe_poc", "result": {"exploit_confirmed": True}},
+        {"tool": "send_http_request", "result": {"is_server_error": True}},
+        {"tool": "send_http_request", "result": {"stack_trace_detected": True}},
+        {"tool": "send_http_request", "result": {"server_crash_suspected": True}},
+    ]}
+    assert fsm._score_severity() == "extreme"
+
+
+async def test_run_cycle_triggers_notification(db_session, monkeypatch):
+    """When K2 completes, the orchestrator scores severity and sends an alert."""
+    import app.services.notifier as notifier_mod
+
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id, target_url="http://target.com",
+        verification_nonce="n", verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+    job = AnalysisJob(
+        id=job_id, workspace_id=workspace_id, status="ready", attack_graph_data={}
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # K2 immediately completes the analysis.
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "complete", "summary": "done",
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    # Make the notifier observably "send".
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    db_session.add(RoutingConfig(role="head_engineer", email_address="eng@corp.example"))
+    await db_session.commit()
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+
+    with patch.object(
+        notifier_mod.resend.Emails, "send", return_value={"id": "email_xyz"}
+    ):
+        final_state = await fsm.run_cycle()
+
+    assert final_state == FSMState.COMPLETE
+    notif = fsm.attack_graph.get("notification")
+    assert notif is not None
+    assert notif["status"] == "sent"
+    assert fsm.attack_graph.get("overall_severity") in {"low", "medium", "high", "extreme"}
+
+
+async def test_run_cycle_notification_skipped_visible(db_session, monkeypatch):
+    """With no API key, completion records a 'skipped' notification (not silent)."""
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id, target_url="http://target.com",
+        verification_nonce="n", verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+    job = AnalysisJob(
+        id=job_id, workspace_id=workspace_id, status="ready", attack_graph_data={}
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({
+        "action": "complete", "summary": "done",
+    }))
+    mock_llm.token_guard = MagicMock(side_effect=lambda msgs, max_t: msgs)
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm.llm_client = mock_llm
+
+    await fsm.run_cycle()
+
+    notif = fsm.attack_graph.get("notification")
+    assert notif is not None
+    assert notif["status"] == "skipped"

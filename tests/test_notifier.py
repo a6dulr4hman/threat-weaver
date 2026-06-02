@@ -1,5 +1,5 @@
 """Tests for K2-driven email recipient routing in NotifierService."""
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -135,3 +135,79 @@ async def test_k2_reasoning_wrapped_response(db_session):
 
     assert to_list == ["sec@corp.example"]
     assert cc_list == []
+
+
+
+# --- send_alert outcome tests ---
+
+
+@pytest.mark.asyncio
+async def test_send_alert_skipped_without_api_key(db_session, monkeypatch):
+    """No RESEND_API_KEY -> skipped with a clear reason, never crashes."""
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    await _seed_roles(db_session, {"head_engineer": "eng@corp.example"})
+
+    notifier = NotifierService(llm_client=MagicMock())
+    result = await notifier.send_alert(db_session, "job-1", "low", {})
+
+    assert result["status"] == "skipped"
+    assert "RESEND_API_KEY" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_send_alert_skipped_without_recipients(db_session, monkeypatch):
+    """API key present but no routing rules -> skipped with guidance."""
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+
+    notifier = NotifierService(llm_client=MagicMock())
+    # No roles seeded -> get_recipients returns empty.
+    result = await notifier.send_alert(db_session, "job-1", "high", {})
+
+    assert result["status"] == "skipped"
+    assert "/config" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_send_alert_sent(db_session, monkeypatch):
+    """Happy path: API key + recipients + successful Resend send -> sent."""
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    await _seed_roles(db_session, {"head_engineer": "eng@corp.example"})
+
+    # LLM unavailable -> falls back to the static matrix (low -> head_engineer).
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value="Error: API returned status 403")
+
+    notifier = NotifierService(llm_client=mock_llm)
+
+    import app.services.notifier as notifier_mod
+
+    with patch.object(
+        notifier_mod.resend.Emails, "send", return_value={"id": "email_123"}
+    ) as mock_send:
+        result = await notifier.send_alert(db_session, "job-1", "low", {"k2_summary": "x"})
+
+    assert result["status"] == "sent"
+    assert result["to"] == ["eng@corp.example"]
+    assert result["message_id"] == "email_123"
+    mock_send.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_alert_failed_on_resend_error(db_session, monkeypatch):
+    """A Resend exception -> failed status with the error reason."""
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    await _seed_roles(db_session, {"head_engineer": "eng@corp.example"})
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value="Error: API returned status 403")
+    notifier = NotifierService(llm_client=mock_llm)
+
+    import app.services.notifier as notifier_mod
+
+    with patch.object(
+        notifier_mod.resend.Emails, "send", side_effect=RuntimeError("boom")
+    ):
+        result = await notifier.send_alert(db_session, "job-1", "low", {})
+
+    assert result["status"] == "failed"
+    assert "boom" in result["reason"]

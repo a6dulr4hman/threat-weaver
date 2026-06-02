@@ -291,6 +291,12 @@ class OrchestratorFSM:
                 # Unknown action type
                 break
 
+        # Phase 6: if the analysis finished, score severity and send the alert.
+        if self.state == FSMState.COMPLETE and not self.attack_graph.get(
+            "notification"
+        ):
+            await self._finalize_and_notify()
+
         await self.save_state()
         return self.state
 
@@ -306,6 +312,74 @@ class OrchestratorFSM:
                 continue
             if not self.transition(next_state):
                 break
+
+    # --- Phase 6: severity scoring + alert routing ------------------------
+
+    def _score_severity(self) -> str:
+        """
+        Grade the job's overall severity from the verified attack graph.
+
+        Counts confirmed exploits (PoC), suspected server crashes / 5xx, and
+        leaked stack traces across the recorded tool results, then maps the
+        total onto Low / Medium / High / Extreme.
+        """
+        confirmed = 0
+        anomalies = 0
+        for entry in self.attack_graph.get("tool_results", []):
+            result = entry.get("result") or {}
+            if not isinstance(result, dict):
+                continue
+            if entry.get("tool") == "execute_safe_poc" and result.get(
+                "exploit_confirmed"
+            ):
+                confirmed += 1
+            if (
+                result.get("is_server_error")
+                or result.get("stack_trace_detected")
+                or result.get("server_crash_suspected")
+                or result.get("anomalies_found", 0)
+            ):
+                anomalies += 1
+
+        if confirmed >= 1 and anomalies >= 3:
+            return "extreme"
+        if confirmed >= 1:
+            return "high"
+        if anomalies >= 3:
+            return "high"
+        if anomalies >= 1:
+            return "medium"
+        return "low"
+
+    async def _finalize_and_notify(self) -> None:
+        """
+        Phase 6: score severity, persist it, and dispatch the email alert.
+
+        The delivery outcome is recorded in attack_graph["notification"] so the
+        result (sent / skipped / failed, with a reason) is always visible in the
+        job data, even when no email goes out.
+        """
+        from app.services.notifier import NotifierService
+
+        severity = self._score_severity()
+        self.attack_graph["overall_severity"] = severity
+
+        # Persist severity onto the job row too.
+        stmt = select(AnalysisJob).where(AnalysisJob.id == self.job_id)
+        result = await self.db.execute(stmt)
+        job = result.scalar_one_or_none()
+        if job:
+            job.overall_severity = severity
+
+        try:
+            notifier = NotifierService(llm_client=self.llm_client)
+            status = await notifier.send_alert(
+                self.db, self.job_id, severity, self.attack_graph
+            )
+        except Exception as e:  # never let notification failure crash the job
+            status = {"status": "failed", "reason": f"Notifier crashed: {e}"}
+
+        self.attack_graph["notification"] = status
 
     def _maybe_advance_state(self, tool_name: str) -> None:
         """Advance FSM state by one step based on tool used."""

@@ -147,24 +147,45 @@ class NotifierService:
 
     async def send_alert(
         self, db: AsyncSession, job_id: str, severity: str, attack_graph: dict
-    ) -> bool:
+    ) -> dict:
         """
-        Send severity-routed email alert.
-        Returns True on success, False on failure.
+        Send a severity-routed email alert.
+
+        Returns a structured status dict so the caller (and the user) can SEE
+        exactly what happened instead of a silent bool. Possible "status"
+        values: "sent", "skipped" (with a reason), or "failed" (with an error).
         """
         if not self.api_key:
-            return False
+            return {
+                "status": "skipped",
+                "reason": "RESEND_API_KEY is not set; cannot send email.",
+                "to": [],
+                "cc": [],
+                "severity": severity,
+            }
 
         to_list, cc_list = await self.get_recipients(db, severity)
 
         if not to_list:
-            return False
+            return {
+                "status": "skipped",
+                "reason": (
+                    "No recipients resolved. Add routing rules at /config "
+                    "(e.g. roles 'ciso', 'head_of_security', 'head_engineer')."
+                ),
+                "to": [],
+                "cc": [],
+                "severity": severity,
+            }
 
+        from_addr = os.getenv(
+            "RESEND_FROM", "ThreatWeaver <alerts@threatweaver.dev>"
+        )
         html_content = self.render_email(severity, attack_graph, job_id)
 
         try:
             params = {
-                "from": "ThreatWeaver <alerts@threatweaver.dev>",
+                "from": from_addr,
                 "to": to_list,
                 "subject": f"[{severity.upper()}] ThreatWeaver Security Alert - Job {job_id[:8]}",
                 "html": html_content,
@@ -172,7 +193,22 @@ class NotifierService:
             if cc_list:
                 params["cc"] = cc_list
 
-            await asyncio.to_thread(resend.Emails.send, params)
-            return True
-        except Exception:
-            return False
+            send_result = await asyncio.to_thread(resend.Emails.send, params)
+            message_id = None
+            if isinstance(send_result, dict):
+                message_id = send_result.get("id")
+            return {
+                "status": "sent",
+                "to": to_list,
+                "cc": cc_list,
+                "severity": severity,
+                "message_id": message_id,
+            }
+        except Exception as e:
+            return {
+                "status": "failed",
+                "reason": f"Resend API error: {e}",
+                "to": to_list,
+                "cc": cc_list,
+                "severity": severity,
+            }
