@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import uuid
 from pathlib import Path
 
@@ -117,11 +118,14 @@ async def import_repo(
         raise HTTPException(status_code=404, detail="Workspace not found")
 
     clone_dir = f"/tmp/threatweaver/{workspace_id}/repo"
+    if os.path.exists(clone_dir):
+        shutil.rmtree(clone_dir)
     os.makedirs(os.path.dirname(clone_dir), exist_ok=True)
 
     try:
         process = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", body.repo_url, clone_dir,
+            "git", "clone", "--depth", "1", "--no-recurse-submodules",
+            body.repo_url, clone_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

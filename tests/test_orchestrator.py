@@ -3,7 +3,6 @@ import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -459,7 +458,7 @@ async def test_orchestrator_error_breaks_loop(db_session):
     fsm = OrchestratorFSM(db=db_session, job_id=job_id)
     fsm.llm_client = mock_llm
 
-    final_state = await fsm.run_cycle()
+    await fsm.run_cycle()
 
     # Should have stopped with an error recorded
     assert "k2_error" in fsm.attack_graph

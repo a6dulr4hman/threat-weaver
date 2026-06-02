@@ -153,6 +153,8 @@ class OrchestratorFSM:
                 agent.feed_result(tool_name, result)
                 # Advance FSM state based on tool type
                 self._maybe_advance_state(tool_name)
+                # Checkpoint after each tool execution to prevent data loss
+                await self.save_state()
             elif action == "error":
                 # K2 response couldn't be parsed - break to avoid infinite loop
                 self.attack_graph["k2_error"] = decision.get("detail", "Unknown error")
@@ -178,7 +180,7 @@ class OrchestratorFSM:
                 break
 
     def _maybe_advance_state(self, tool_name: str) -> None:
-        """Advance FSM state based on what tool was just used."""
+        """Advance FSM state by one step based on tool used."""
         tool_to_min_state = {
             "run_nmap": FSMState.RECON,
             "run_fuzzer": FSMState.DAST_TESTING,
@@ -187,15 +189,9 @@ class OrchestratorFSM:
             "generate_patch": FSMState.BLUE_TEAM_REMEDIATION,
         }
         target_state = tool_to_min_state.get(tool_name)
-        if target_state and target_state.value != self.state.value:
-            # Advance through valid transitions up to target
-            state_chain = [
-                FSMState.RECON, FSMState.DAST_TESTING,
-                FSMState.POC_VERIFICATION, FSMState.BLUE_TEAM_REMEDIATION,
-            ]
-            for next_state in state_chain:
-                if self.state == target_state:
-                    break
-                if next_state.value == self.state.value:
-                    continue
-                self.transition(next_state)
+        if not target_state:
+            return
+        # Only advance one step (the next valid state from current)
+        valid_next = TRANSITIONS.get(self.state, [])
+        if valid_next and self.state != target_state:
+            self.transition(valid_next[0])

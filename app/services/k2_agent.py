@@ -4,6 +4,7 @@ import json
 from app.services.llm_client import LLMClient
 
 MAX_ITERATIONS = 20
+MAX_HISTORY_MESSAGES = 20
 
 SYSTEM_PROMPT = """You are K2-Think-v2, the autonomous security analysis engine for ThreatWeaver.
 You drive the entire vulnerability analysis pipeline. Given the current analysis state, 
@@ -63,6 +64,10 @@ class K2Agent:
         # Track conversation
         self.conversation_history.append({"role": "user", "content": f"State: {state_message}"})
         self.conversation_history.append({"role": "assistant", "content": response})
+
+        # Sliding window: keep only the last MAX_HISTORY_MESSAGES messages
+        if len(self.conversation_history) > MAX_HISTORY_MESSAGES:
+            self.conversation_history = self.conversation_history[-MAX_HISTORY_MESSAGES:]
 
         # Parse K2's response
         return self._parse_decision(response)

@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -67,22 +67,8 @@ async def test_verify_workspace_dns(client):
         "/api/workspaces", json={"target_url": "example.com"}
     )
     workspace_id = create_resp.json()["id"]
-    nonce = create_resp.json()["verification_nonce"]
 
-    # Mock DNS resolver to return the nonce in a TXT record
-    mock_rdata = MagicMock()
-    mock_rdata.strings = [nonce.encode()]
-    mock_answer = MagicMock()
-    mock_answer.__iter__ = lambda self: iter([mock_rdata])
-
-    with patch("app.services.verification.dns.resolver.resolve", return_value=mock_answer):
-        with patch("app.services.verification.asyncio.get_event_loop") as mock_loop:
-            # Make run_in_executor call the function directly
-            async def run_executor(executor, func, *args):
-                return func(*args)
-            mock_loop.return_value.run_in_executor = AsyncMock(side_effect=lambda ex, fn, *a: _run_sync(fn, *a))
-
-    # Use a simpler approach - patch the internal _check_dns_txt directly
+    # Patch the internal _check_dns_txt directly
     with patch("app.services.verification._check_dns_txt", new_callable=AsyncMock) as mock_dns:
         mock_dns.return_value = True
         response = await client.post(f"/api/workspaces/{workspace_id}/verify")
@@ -189,7 +175,7 @@ async def test_import_repo_valid(client):
 
     # Verify the subprocess was called correctly
     mock_exec.assert_called_once_with(
-        "git", "clone", "--depth", "1",
+        "git", "clone", "--depth", "1", "--no-recurse-submodules",
         "https://github.com/owner/repo",
         f"/tmp/threatweaver/{workspace_id}/repo",
         stdout=asyncio.subprocess.PIPE,
