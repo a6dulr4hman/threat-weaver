@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import resend
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,7 +44,10 @@ class NotifierService:
         self.api_key = os.getenv("RESEND_API_KEY", "")
         resend.api_key = self.api_key
         template_dir = Path(__file__).parent.parent / "templates" / "email"
-        self.env = Environment(loader=FileSystemLoader(str(template_dir)))
+        self.env = Environment(
+            loader=FileSystemLoader(str(template_dir)),
+            autoescape=select_autoescape(["html"]),
+        )
         self.llm_client = llm_client or LLMClient()
 
     async def _load_routing_configs(self, db: AsyncSession) -> dict[str, str]:
@@ -132,18 +135,127 @@ class NotifierService:
         cc_list = [available[r] for r in cc_roles if r in available]
         return to_list, cc_list
 
+    def _build_report(self, attack_graph: dict, severity: str) -> dict:
+        """
+        Turn the raw attack graph into a human-readable report for the email.
+
+        Extracts the actual findings (crashes, error leaks, confirmed exploits),
+        recon results, and remediations - instead of dumping the raw dict keys,
+        which is what produced the useless "tool_results / endpoint_attempts"
+        email. The huge raw patch text is intentionally NOT included.
+        """
+        from datetime import datetime, timezone
+
+        tool_results = attack_graph.get("tool_results", []) or []
+        recon_ports: list[dict] = []
+        remediations: list[dict] = []
+        findings_by_key: dict[tuple, dict] = {}
+
+        def _truncate(value: str, limit: int = 240) -> str:
+            value = str(value)
+            return value if len(value) <= limit else value[:limit] + "..."
+
+        for entry in tool_results:
+            tool = entry.get("tool")
+            result = entry.get("result") or {}
+            args = entry.get("arguments") or {}
+            if not isinstance(result, dict):
+                continue
+
+            if tool == "run_nmap":
+                for svc in result.get("results", []) or []:
+                    recon_ports.append({
+                        "port": svc.get("port"),
+                        "service": svc.get("service") or "unknown",
+                        "version": svc.get("version") or "",
+                    })
+
+            elif tool in ("send_http_request", "run_fuzzer"):
+                is_anomaly = (
+                    result.get("is_server_error")
+                    or result.get("stack_trace_detected")
+                    or result.get("server_crash_suspected")
+                    or result.get("anomalies_found", 0)
+                )
+                if not is_anomaly:
+                    continue
+                endpoint = args.get("endpoint") or args.get("url") or "(unknown endpoint)"
+                method = args.get("method") or ("FUZZ" if tool == "run_fuzzer" else "GET")
+                if result.get("stack_trace_detected"):
+                    kind = "Stack trace / source leak"
+                elif result.get("server_crash_suspected"):
+                    kind = "Server crash on crafted input"
+                elif result.get("is_server_error"):
+                    kind = "Server-side error (HTTP 5xx)"
+                else:
+                    kind = "Anomalous response"
+                payload = (
+                    args.get("json_body")
+                    or args.get("params")
+                    or args.get("payloads")
+                )
+                key = (endpoint, kind)
+                if key in findings_by_key:
+                    findings_by_key[key]["count"] += 1
+                else:
+                    findings_by_key[key] = {
+                        "title": f"{kind} \u2014 {method} {endpoint}",
+                        "kind": kind,
+                        "endpoint": endpoint,
+                        "method": method,
+                        "payload": _truncate(json.dumps(payload)) if payload else "",
+                        "detail": _truncate(result.get("telemetry") or ""),
+                        "count": 1,
+                    }
+
+            elif tool == "execute_safe_poc":
+                if result.get("exploit_confirmed"):
+                    key = ("poc", entry.get("iteration"))
+                    findings_by_key[key] = {
+                        "title": "Confirmed exploit (verified in sandbox PoC)",
+                        "kind": "Confirmed exploit",
+                        "endpoint": args.get("sandbox_id", ""),
+                        "method": "",
+                        "payload": "",
+                        "detail": _truncate(result.get("trace") or ""),
+                        "count": 1,
+                    }
+
+            elif tool == "generate_patch":
+                remediations.append({"vuln_node": args.get("vuln_node", "unknown")})
+
+        return {
+            "summary": attack_graph.get("k2_summary") or "",
+            "severity": severity,
+            "findings": list(findings_by_key.values()),
+            "recon_ports": recon_ports,
+            "remediations": remediations,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        }
+
     def render_email(self, severity: str, attack_graph: dict, job_id: str) -> str:
         """Render the appropriate email template for the severity level."""
+        report = self._build_report(attack_graph, severity)
         try:
             template = self.env.get_template(f"{severity}.html")
-            return template.render(attack_graph=attack_graph, job_id=job_id)
+            return template.render(job_id=job_id, **report)
         except Exception:
-            # Fallback to plain text if template not found
-            return (
-                f"ThreatWeaver Alert - Severity: {severity.upper()}\n\n"
-                f"Job ID: {job_id}\n"
-                f"Attack Graph: {attack_graph}"
-            )
+            # Plain-text fallback that still conveys the actual findings.
+            lines = [
+                f"ThreatWeaver Alert - Severity: {severity.upper()}",
+                f"Job ID: {job_id}",
+                f"Generated: {report['timestamp']}",
+                "",
+            ]
+            if report["summary"]:
+                lines += ["Summary:", report["summary"], ""]
+            if report["findings"]:
+                lines.append("Findings:")
+                for f in report["findings"]:
+                    lines.append(f"- {f['title']}")
+            else:
+                lines.append("No exploitable anomalies were confirmed.")
+            return "\n".join(lines)
 
     async def send_alert(
         self, db: AsyncSession, job_id: str, severity: str, attack_graph: dict

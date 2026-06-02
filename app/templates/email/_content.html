@@ -1,0 +1,83 @@
+{# Shared email body. Expects: job_id, summary, severity, findings,
+   recon_ports, remediations, timestamp, accent (hex), border (hex). #}
+<p style="color: #111827; font-size: 16px; margin-bottom: 20px;">{{ intro }}</p>
+
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
+    <tr>
+        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+            <strong style="color: #374151;">Job ID:</strong>
+            <span style="color: #6b7280; font-family: monospace;">{{ job_id }}</span>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+            <strong style="color: #374151;">Severity:</strong>
+            <span style="color: {{ accent }}; font-weight: bold;">{{ severity | upper }}</span>
+        </td>
+    </tr>
+</table>
+
+{% if summary %}
+<h2 style="color: {{ accent }}; font-size: 18px; margin-bottom: 8px;">What we found</h2>
+<p style="color: #374151; font-size: 14px; line-height: 1.6; margin-bottom: 20px;">{{ summary }}</p>
+{% endif %}
+
+{% if findings %}
+<h2 style="color: {{ accent }}; font-size: 18px; margin-bottom: 10px;">Vulnerabilities ({{ findings | length }})</h2>
+<table width="100%" cellpadding="10" cellspacing="0" style="border: 1px solid {{ border }}; border-radius: 4px; margin-bottom: 20px;">
+    {% for f in findings %}
+    <tr style="border-bottom: 1px solid {{ border }};">
+        <td>
+            <p style="color: #111827; font-size: 14px; font-weight: bold; margin: 0 0 4px 0;">
+                {{ f.title }}{% if f.count and f.count > 1 %} (x{{ f.count }}){% endif %}
+            </p>
+            {% if f.payload %}
+            <p style="color: #6b7280; font-size: 12px; font-family: monospace; margin: 0 0 4px 0;">
+                payload: {{ f.payload }}
+            </p>
+            {% endif %}
+            {% if f.detail %}
+            <p style="color: #6b7280; font-size: 12px; margin: 0;">{{ f.detail }}</p>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p style="color: #4b5563; font-size: 14px; margin-bottom: 20px;">
+    No exploitable anomalies were confirmed during this scan.
+</p>
+{% endif %}
+
+{% if recon_ports %}
+<h2 style="color: {{ accent }}; font-size: 18px; margin-bottom: 10px;">Exposed services</h2>
+<table width="100%" cellpadding="8" cellspacing="0" style="border: 1px solid {{ border }}; border-radius: 4px; margin-bottom: 20px;">
+    <tr style="background-color: #f9fafb;">
+        <td style="color: #374151; font-size: 12px; font-weight: bold;">Port</td>
+        <td style="color: #374151; font-size: 12px; font-weight: bold;">Service</td>
+        <td style="color: #374151; font-size: 12px; font-weight: bold;">Version</td>
+    </tr>
+    {% for p in recon_ports %}
+    <tr style="border-top: 1px solid {{ border }};">
+        <td style="color: #4b5563; font-size: 13px;">{{ p.port }}</td>
+        <td style="color: #4b5563; font-size: 13px;">{{ p.service }}</td>
+        <td style="color: #4b5563; font-size: 13px;">{{ p.version }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+
+{% if remediations %}
+<h2 style="color: {{ accent }}; font-size: 18px; margin-bottom: 10px;">Remediations generated</h2>
+<table width="100%" cellpadding="8" cellspacing="0" style="border: 1px solid {{ border }}; border-radius: 4px; margin-bottom: 20px;">
+    {% for r in remediations %}
+    <tr style="border-bottom: 1px solid {{ border }};">
+        <td style="color: #4b5563; font-size: 13px;">
+            Patch generated for <strong>{{ r.vuln_node }}</strong> (review in the ThreatWeaver dashboard)
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+
+<p style="color: #6b7280; font-size: 12px; margin-top: 30px;">Generated: {{ timestamp }}</p>

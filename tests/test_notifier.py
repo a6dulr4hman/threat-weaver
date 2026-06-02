@@ -211,3 +211,87 @@ async def test_send_alert_failed_on_resend_error(db_session, monkeypatch):
 
     assert result["status"] == "failed"
     assert "boom" in result["reason"]
+
+
+
+# --- Email report content tests (regression for the "useless email") ---
+
+
+def _sample_attack_graph():
+    return {
+        "endpoint_attempts": {"http://t/login": 0},
+        "exhausted_endpoints": [],
+        "k2_summary": "The /login endpoint crashed on malformed JSON input.",
+        "overall_severity": "high",
+        "tool_results": [
+            {"tool": "run_nmap", "arguments": {}, "result": {"results": [
+                {"port": 22, "service": "ssh", "version": "9.6p1"},
+                {"port": 80, "service": "http", "version": ""},
+            ]}},
+            {"tool": "send_http_request",
+             "arguments": {"method": "POST", "endpoint": "http://t/login",
+                           "json_body": {"username": "admin", "password": ""}},
+             "result": {"status_code": 0, "is_server_error": True,
+                        "server_crash_suspected": True,
+                        "telemetry": "socket ReadError: connection dropped."}},
+            {"tool": "generate_patch", "arguments": {"vuln_node": "login_json_vuln"},
+             "result": {"patch": "...."}},
+        ],
+    }
+
+
+def test_build_report_extracts_findings():
+    """_build_report turns the raw attack graph into real findings, not dict keys."""
+    svc = NotifierService(llm_client=MagicMock())
+    report = svc._build_report(_sample_attack_graph(), "high")
+
+    assert report["summary"].startswith("The /login endpoint crashed")
+    assert len(report["findings"]) == 1
+    assert "POST http://t/login" in report["findings"][0]["title"]
+    assert {(p["port"], p["service"]) for p in report["recon_ports"]} == {
+        (22, "ssh"), (80, "http")
+    }
+    assert report["remediations"] == [{"vuln_node": "login_json_vuln"}]
+    assert report["timestamp"] != "N/A"
+
+
+def test_render_email_contains_real_content():
+    """The rendered HTML shows findings/summary/ports - never raw dict keys."""
+    svc = NotifierService(llm_client=MagicMock())
+    html = svc.render_email("high", _sample_attack_graph(), "job-12345678")
+
+    assert "What we found" in html
+    assert "Server crash on crafted input" in html
+    assert "http://t/login" in html
+    assert "ssh" in html
+    assert "login_json_vuln" in html
+    # The old bug dumped these raw top-level keys into the email body.
+    assert "endpoint_attempts" not in html
+    assert "exhausted_endpoints" not in html
+    # Timestamp must be populated, not the old "N/A".
+    assert "Generated: N/A" not in html
+
+
+def test_render_email_no_findings_message():
+    """With no anomalies, the email says so explicitly instead of being blank."""
+    svc = NotifierService(llm_client=MagicMock())
+    graph = {"k2_summary": "Nothing exploitable found.", "tool_results": []}
+    html = svc.render_email("low", graph, "job-1")
+
+    assert "No exploitable anomalies were confirmed" in html
+
+
+def test_render_email_autoescapes_malicious_body():
+    """Attacker-controlled response text is HTML-escaped in the email."""
+    svc = NotifierService(llm_client=MagicMock())
+    graph = {
+        "tool_results": [
+            {"tool": "send_http_request",
+             "arguments": {"method": "GET", "endpoint": "http://t/x"},
+             "result": {"is_server_error": True,
+                        "telemetry": "<script>alert(1)</script>"}},
+        ],
+    }
+    html = svc.render_email("medium", graph, "job-1")
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
