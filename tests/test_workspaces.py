@@ -228,3 +228,30 @@ async def test_import_repo_workspace_not_found(client):
         json={"repo_url": "https://github.com/owner/repo"},
     )
     assert response.status_code == 404
+
+
+
+@pytest.mark.asyncio
+async def test_verify_domain_mock_bypass(monkeypatch):
+    """When MOCK_VERIFICATION is enabled, verify_domain auto-accepts."""
+    from app.services.verification import verify_domain
+
+    monkeypatch.setenv("MOCK_VERIFICATION", "true")
+    # Even with a bogus domain and nonce, the bypass returns True without any
+    # network call.
+    assert await verify_domain("definitely-not-a-real-domain.invalid", "bad") is True
+
+
+@pytest.mark.asyncio
+async def test_verify_domain_mock_disabled_falls_back(monkeypatch):
+    """When MOCK_VERIFICATION is off, real checks run (and fail for a bad nonce)."""
+    from app.services import verification
+
+    monkeypatch.setenv("MOCK_VERIFICATION", "false")
+    with patch.object(
+        verification, "_check_dns_txt", new_callable=AsyncMock, return_value=False
+    ), patch.object(
+        verification, "_check_http", new_callable=AsyncMock, return_value=False
+    ):
+        result = await verification.verify_domain("example.com", "nonce")
+    assert result is False

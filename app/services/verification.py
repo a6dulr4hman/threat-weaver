@@ -1,7 +1,21 @@
 import asyncio
+import logging
+import os
 
 import dns.resolver
 import httpx
+
+logger = logging.getLogger(__name__)
+
+# TEMPORARY: when MOCK_VERIFICATION is enabled, verify_domain auto-accepts every
+# domain without performing the real DNS/HTTP checks. This is a stopgap while the
+# DNS TXT verification flow is being debugged. Remove once that is fixed.
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _mock_verification_enabled() -> bool:
+    """Read the bypass flag at call time so it can be toggled per-environment."""
+    return os.getenv("MOCK_VERIFICATION", "").strip().lower() in _TRUTHY
 
 
 async def _check_dns_txt(target_url: str, expected_nonce: str) -> bool:
@@ -33,6 +47,15 @@ async def _check_http(target_url: str, expected_nonce: str) -> bool:
 
 async def verify_domain(target_url: str, expected_nonce: str) -> bool:
     """Verify domain ownership by checking DNS TXT record first, then HTTP fallback."""
+    # TEMPORARY bypass: auto-accept when MOCK_VERIFICATION is enabled.
+    if _mock_verification_enabled():
+        logger.warning(
+            "MOCK_VERIFICATION enabled - auto-accepting domain '%s' without a real "
+            "ownership check. Disable this before production.",
+            target_url,
+        )
+        return True
+
     # Try DNS TXT record at _threatweaver.<domain>
     if await _check_dns_txt(target_url, expected_nonce):
         return True
