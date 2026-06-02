@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Mitigation
 from app.services.llm_client import LLMClient
+from app.services.llm_json import extract_json_object
 
 
 class RemediationService:
@@ -51,32 +52,85 @@ class RemediationService:
 
     async def generate_patch(
         self, job_id: str, vuln_node: str, source_code: str
-    ) -> str:
+    ) -> dict:
         """
-        Ask the LLM to generate a security fix for the vulnerability.
-        Returns the cleaned remediation code (reasoning monologue stripped).
+        Ask the LLM for a full structured security finding, not just code.
+
+        Returns a dict with:
+          description   – plain-English explanation of what the vulnerability is
+          risk_level    – Critical / High / Medium / Low
+          cves          – list of relevant CVE IDs (empty list if none)
+          recommendation – concise one-paragraph fix strategy
+          code          – the actual patched code (cleaned, no reasoning monologue)
+
+        The LLM is instructed to reply with a JSON object so all fields come
+        back in one call (same token budget, richer output).
         """
+        system_prompt = (
+            "You are a senior application security engineer writing a formal "
+            "vulnerability report for a development team.\n\n"
+            "Respond with EXACTLY ONE JSON object and no other text. "
+            "Keep any chain-of-thought reasoning inside <think></think> tags "
+            "BEFORE the JSON.\n\n"
+            "Required JSON schema:\n"
+            "{\n"
+            '  "description": "<2-3 sentence plain-English explanation of what '
+            'the vulnerability is and how it can be exploited>",\n'
+            '  "risk_level": "<Critical|High|Medium|Low>",\n'
+            '  "cves": ["CVE-YYYY-NNNNN", ...],\n'
+            '  "recommendation": "<1-paragraph concise fix strategy without '
+            'code - what the developer should do and why>",\n'
+            '  "code": "<the complete patched code block that fixes the '
+            'vulnerability>"\n'
+            "}\n\n"
+            "Rules:\n"
+            "- cves must be an array (empty [] if no known CVE applies).\n"
+            "- code must contain only the fixed code, no markdown fences, "
+            "no explanatory prose.\n"
+            "- risk_level must be exactly one of: Critical, High, Medium, Low."
+        )
+        user_prompt = (
+            f"Vulnerability: {vuln_node}\n\n"
+            f"Affected source code:\n```\n{source_code}\n```\n\n"
+            "Produce the structured security finding JSON."
+        )
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a security engineer. Generate a minimal code patch "
-                    "that fixes the described vulnerability. Put ONLY the fixed "
-                    "code inside a single ```python code block. Keep any "
-                    "reasoning inside <think></think> tags before it."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Vulnerability: {vuln_node}\n\n"
-                    f"Source code:\n```\n{source_code}\n```\n\n"
-                    "Provide the patched code that fixes this vulnerability."
-                ),
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
         ]
         raw = await self.llm_client.chat(messages, role="remediation")
-        return self.clean_patch(raw)
+        return self._parse_finding(raw, vuln_node)
+
+    def _parse_finding(self, raw: str, vuln_node: str) -> dict:
+        """
+        Parse the LLM response into a structured finding dict.
+
+        Tries structured JSON first; falls back gracefully so the pipeline
+        never crashes on a malformed response.
+        """
+        fallback = {
+            "description": f"Security vulnerability detected in {vuln_node}.",
+            "risk_level": "High",
+            "cves": [],
+            "recommendation": "Review and remediate the identified vulnerability.",
+            "code": self.clean_patch(raw),
+        }
+
+        obj = extract_json_object(raw, required_key="description")
+        if obj is None:
+            # Maybe the whole cleaned text is the code (old-style response).
+            fallback["code"] = self.clean_patch(raw)
+            return fallback
+
+        return {
+            "description":    str(obj.get("description", fallback["description"])),
+            "risk_level":     str(obj.get("risk_level", "High")).capitalize(),
+            "cves":           [str(c) for c in obj.get("cves", [])]
+                              if isinstance(obj.get("cves"), list) else [],
+            "recommendation": str(obj.get("recommendation",
+                                          fallback["recommendation"])),
+            "code":           self.clean_patch(str(obj.get("code", ""))),
+        }
 
     def validate_syntax(self, code: str) -> bool:
         """

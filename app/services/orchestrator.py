@@ -339,16 +339,15 @@ class OrchestratorFSM:
                     agent.feed_result(tool_name, result)
 
                     # Record a successfully patched node (dedup + budget above)
-                    # and persist the remediation to the mitigations table.
+                    # and persist the full structured finding to the mitigations
+                    # table (description, risk, CVEs, recommendation + code).
                     if tool_name == "generate_patch" and not result.get("error"):
                         vuln_node = (arguments.get("vuln_node") or "").strip()
                         if vuln_node:
                             self.attack_graph.setdefault(
                                 "patched_nodes", []
                             ).append(vuln_node)
-                            await self._store_mitigation(
-                                vuln_node, result.get("patch", "")
-                            )
+                            await self._store_mitigation(vuln_node, result)
 
                     # Per-endpoint attack budget: count the attempt; if the
                     # endpoint is now exhausted (or close), tell the agent.
@@ -451,14 +450,35 @@ class OrchestratorFSM:
             self._advance_to_complete()
         await self._finalize_and_report()
 
-    async def _store_mitigation(self, vuln_node: str, patch: str) -> None:
-        """Persist a generated patch to the mitigations table (best-effort)."""
+    async def _store_mitigation(self, vuln_node: str, result: dict) -> None:
+        """
+        Persist a structured finding to the mitigations table (best-effort).
+
+        `result` is the dict returned by ToolExecutor._exec_patch, which now
+        contains: vuln_node, patch (code), description, risk_level, cves,
+        recommendation.
+        """
         from app.services.remediation import RemediationService
 
-        cleaned = RemediationService.clean_patch(patch)
+        code = RemediationService.clean_patch(result.get("patch", ""))
+        metadata = {
+            "description":    result.get("description", ""),
+            "risk_level":     result.get("risk_level", "High"),
+            "cves":           result.get("cves", []),
+            "recommendation": result.get("recommendation", ""),
+        }
         try:
-            svc = RemediationService(llm_client=self.llm_client)
-            await svc.store_mitigation(self.db, self.job_id, vuln_node, cleaned)
+            from app.models import Mitigation
+            import uuid as _uuid
+            mitigation = Mitigation(
+                id=str(_uuid.uuid4()),
+                job_id=self.job_id,
+                vulnerability_node=vuln_node,
+                remediation_code=code,
+                finding_metadata=metadata,
+            )
+            self.db.add(mitigation)
+            await self.db.commit()
         except Exception:
             # Storage failure must not crash the analysis loop.
             pass

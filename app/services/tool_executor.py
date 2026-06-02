@@ -80,7 +80,16 @@ class ToolExecutor:
     async def _exec_patch(self, args: dict) -> dict:
         vuln_node = args.get("vuln_node", "")
         source_code = args.get("source_code", "")
-        patch = await self.remediation_svc.generate_patch(
+        # generate_patch now returns a structured finding dict:
+        # {description, risk_level, cves, recommendation, code}
+        finding = await self.remediation_svc.generate_patch(
             job_id=self.job_id, vuln_node=vuln_node, source_code=source_code
         )
-        return {"patch": patch, "vuln_node": vuln_node}
+        return {
+            "vuln_node":      vuln_node,
+            "patch":          finding.get("code", ""),   # backward-compat key
+            "description":    finding.get("description", ""),
+            "risk_level":     finding.get("risk_level", "High"),
+            "cves":           finding.get("cves", []),
+            "recommendation": finding.get("recommendation", ""),
+        }

@@ -30,6 +30,9 @@ class Mitigation(Base):
     job_id = Column(String(36), ForeignKey("analysis_jobs.id"), nullable=False)
     vulnerability_node = Column(String(100), nullable=False)
     remediation_code = Column(Text, nullable=True)
+    # Structured finding metadata: description, risk_level, cves, recommendation.
+    # Stored as JSON so new fields can be added without schema migrations.
+    finding_metadata = Column(JSON, nullable=True)
 
 
 class RoutingConfig(Base):

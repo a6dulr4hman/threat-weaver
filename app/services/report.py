@@ -197,10 +197,18 @@ class ReportService:
         result = await db.execute(
             select(Mitigation).where(Mitigation.job_id == job_id)
         )
-        return [
-            {"vuln_node": m.vulnerability_node, "code": m.remediation_code or ""}
-            for m in result.scalars().all()
-        ]
+        rows = []
+        for m in result.scalars().all():
+            meta = m.finding_metadata or {}
+            rows.append({
+                "vuln_node":      m.vulnerability_node,
+                "code":           m.remediation_code or "",
+                "description":    meta.get("description", ""),
+                "risk_level":     meta.get("risk_level", ""),
+                "cves":           meta.get("cves", []),
+                "recommendation": meta.get("recommendation", ""),
+            })
+        return rows
 
     async def generate(
         self, db: AsyncSession, job_id: str, severity: str, attack_graph: dict
@@ -365,14 +373,80 @@ class ReportService:
         # ── Remediations ──────────────────────────────────────────── #
         story.append(Paragraph(f"Remediations ({len(mitigations)})", sty["h2"]))
         if mitigations:
-            for m in mitigations:
+            # Risk badge colours
+            risk_colors = {
+                "critical": ("#7f1d1d", "#fee2e2"),
+                "high":     ("#7c2d12", "#fed7aa"),
+                "medium":   ("#713f12", "#fef9c3"),
+                "low":      ("#14532d", "#dcfce7"),
+            }
+            for idx, m in enumerate(mitigations):
+                if idx > 0:
+                    story.append(HRFlowable(
+                        width="100%", thickness=0.4,
+                        color=colors.HexColor("#e2e8f0"), spaceAfter=4,
+                    ))
+
+                vuln = _esc(m["vuln_node"])
+                risk = (m.get("risk_level") or "High").strip().lower()
+                risk_label = risk.capitalize()
+                fg, bg = risk_colors.get(risk, ("#1e3a5f", "#dbeafe"))
+
+                # ── Finding title + risk badge ── #
+                badge_style = ParagraphStyle(
+                    f"badge_{idx}_{id(story)}",
+                    parent=sty["bold"],
+                    fontSize=12,
+                )
                 story.append(Paragraph(
-                    f"Patch for: <b>{_esc(m['vuln_node'])}</b>", sty["body"]
+                    f"{vuln} &nbsp;"
+                    f'<font color="{fg}" backColor="{bg}"'
+                    f'> {risk_label} </font>',
+                    badge_style,
                 ))
+                story.append(Spacer(1, 4))
+
+                # ── Description ── #
+                if m.get("description"):
+                    detail_rows = [
+                        [Paragraph("<b>Description</b>", sty["label"]),
+                         Paragraph(_esc(m["description"]), sty["body"])],
+                    ]
+                    # ── CVEs ── #
+                    if m.get("cves"):
+                        cve_text = "  ".join(m["cves"])
+                        detail_rows.append([
+                            Paragraph("<b>CVEs</b>", sty["label"]),
+                            Paragraph(
+                                f'<font color="#dc2626"><b>{_esc(cve_text)}</b></font>',
+                                sty["body"],
+                            ),
+                        ])
+                    # ── Recommendation ── #
+                    if m.get("recommendation"):
+                        detail_rows.append([
+                            Paragraph("<b>Fix strategy</b>", sty["label"]),
+                            Paragraph(_esc(m["recommendation"]), sty["body"]),
+                        ])
+
+                    detail_t = Table(
+                        detail_rows,
+                        colWidths=[1.2 * inch, _TEXT_WIDTH - 1.2 * inch],
+                        hAlign="LEFT",
+                    )
+                    detail_t.setStyle(TableStyle([
+                        ("FONTSIZE",      (0, 0), (-1, -1), 9),
+                        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+                        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+                        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+                    ]))
+                    story.append(detail_t)
+                    story.append(Spacer(1, 6))
+
+                # ── Patched code ── #
                 raw_code = m.get("code") or "# No remediation code available"
-                # Preformatted preserves indentation/newlines exactly and
-                # needs no XML escaping - it renders as plain monospace text.
-                # Wrap long lines so they don't overflow the page margin.
                 wrapped_lines = []
                 for line in raw_code.splitlines():
                     if len(line) <= 90:
@@ -384,11 +458,12 @@ class ReportService:
                                           break_long_words=True)
                         )
                 code_text = "\n".join(wrapped_lines)
-                story.append(Spacer(1, 3))
+                story.append(Paragraph("<b>Patched code</b>", sty["label"]))
+                story.append(Spacer(1, 2))
                 story.append(Preformatted(
                     code_text,
                     ParagraphStyle(
-                        f"code_{m['vuln_node']}_{id(story)}",
+                        f"code_{idx}_{id(story)}",
                         fontName="Courier",
                         fontSize=7.5,
                         leading=11,
