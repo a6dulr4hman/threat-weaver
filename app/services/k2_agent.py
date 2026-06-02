@@ -33,45 +33,49 @@ The final JSON object MUST be one of these two shapes:
 Available tools and their arguments:
 - run_nmap: {"target": "domain.com", "port_range": "1-1024"}
 - send_http_request: {"method": "GET|POST|PUT|PATCH|DELETE", "endpoint": "http://host/path", "headers": {...}, "json_body": {...}, "params": {...}}
-- run_fuzzer: {"url": "http://domain.com/path", "payloads": [{"param": "q", "value": "..."}], "injection_type": "query|body"}
 - execute_safe_poc: {"sandbox_id": "<id>", "script": "<python script>", "expected_signature": {...}}
 - query_hackclub: {"component": "<name>", "version": "<version>"}
 - generate_patch: {"vuln_node": "<id>", "source_code": "<code to fix>"}
 
 CORE METHOD - the Context-Aware Exploitation Loop (ReAct):
-Your primary weapon is `send_http_request`, a RAW HTTP primitive. Do not rely on packaged
-payload scripts; construct each attack vector yourself by reasoning about the application's
-business logic, then observe the real response and pivot.
+`send_http_request` is your primary weapon: a RAW HTTP primitive. You send ONE
+request at a time, read the exact response, and engineer the NEXT payload from
+what you observed. Adapt sequentially - do not request batch payload sweeps.
 
-1. OBSERVE: Read the SAST code analysis. Find a concrete route and its expected inputs
-   (e.g. "a /transfer route in app.py expecting `amount` and `target_account`").
-2. REASON: Infer a SPECIFIC flaw from the logic, not a generic attack. Example:
-   <think>The AST map shows no validation on the `amount` integer. I will attempt a logic
-   flaw by sending a negative value to reverse-transfer the money.</think>
-3. ACT: Emit a send_http_request tool call with your custom payload.
-4. FEEDBACK: The backend returns the raw status code and response body. READ IT.
-5. PIVOT: If you get a 500 with a stack trace, read the trace, identify which validation or
-   parser rejected you, adjust your syntax, and fire a newly crafted payload. A leaked stack
-   trace or an unhandled 500 is itself a finding worth verifying.
+1. OBSERVE: Use the source-derived route map (provided as `routes`) to pick a
+   REAL endpoint and its expected inputs. NEVER guess commodity paths like
+   /api/v1/customers - if it is not in `routes` or the code analysis, it almost
+   certainly does not exist (you will just collect 404s).
+2. REASON: Infer a SPECIFIC flaw from the business logic, not a generic attack.
+   Example: <think>The /transfer handler has no validation on `amount`. I will
+   send a negative value to attempt a reverse-transfer.</think>
+3. ACT: Emit ONE send_http_request with your custom payload.
+4. FEEDBACK: Read the raw status code AND body. Watch for:
+     - status 500 + leaked stack trace (stack_trace_detected = true)
+     - server_crash_suspected = true: your payload DROPPED the connection
+       (ReadError / RemoteProtocolError). STRONG lead - the backend likely hit
+       an unhandled exception on this input. Dig into that exact parameter.
+     - reflected input, auth-state changes, or error strings in the body.
+5. PIVOT: On a 500 or a connection drop, read what leaked, identify the parser
+   or validation that broke, adjust your syntax, and fire a refined payload.
 
-Once you have triggered and understood an anomaly, use execute_safe_poc to confirm it, then
-generate_patch to remediate. Use query_hackclub to map service banners (from run_nmap) to
-known CVEs.
+Once an anomaly is understood, confirm it with execute_safe_poc, then
+generate_patch. Map run_nmap service banners to CVEs with query_hackclub.
 
 GUARDRAILS (important):
-- You get at most THREE attack attempts per endpoint. If three crafted payloads against the
-  same endpoint fail to trigger an anomaly, the orchestrator will tell you that endpoint is
-  exhausted - do NOT keep hammering it. Move to the next route.
-- Watch the iteration counter; finish with {"action": "complete", ...} when no useful action
-  remains rather than looping pointlessly. This protects the token budget and the 120s gateway
-  timeout.
+- At most THREE attack attempts per endpoint. A 500, a stack trace, or a
+  connection drop counts as an anomaly and RESETS that budget (you have a lead).
+  Three benign responses in a row exhaust the endpoint - the orchestrator will
+  say so, and you must move on.
+- Watch the iteration counter; finish with {"action": "complete", ...} when no
+  useful action remains. This protects the token budget and 120s gateway timeout.
 
 Output rules (critical):
 - The final line of your reply must be a single valid JSON object.
 - Do NOT add any text after the JSON object.
 - Do NOT wrap the JSON in markdown fences.
 - If code analysis reports no source files (e.g. an unsupported language), probe the live
-  target with send_http_request / run_fuzzer instead of giving up."""
+  target with send_http_request instead of giving up."""
 
 CORRECTION_PROMPT = (
     "Your previous reply could not be parsed. Respond with ONLY a single valid JSON "
@@ -92,13 +96,14 @@ class K2Agent:
         return json.dumps({
             "current_phase": context.get("phase", "ready"),
             "target": context.get("target"),
+            "routes": context.get("routes", []),
             "code_analysis": context.get("code_analysis"),
             "attack_graph": context.get("attack_graph", {}),
             "endpoint_attempts": context.get("endpoint_attempts", {}),
             "exhausted_endpoints": context.get("exhausted_endpoints", []),
             "iteration": context.get("iteration", 0),
             "available_tools": [
-                "run_nmap", "send_http_request", "run_fuzzer",
+                "run_nmap", "send_http_request",
                 "execute_safe_poc", "query_hackclub", "generate_patch",
             ],
         }, indent=2)

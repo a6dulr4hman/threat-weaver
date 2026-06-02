@@ -354,3 +354,98 @@ async def test_send_http_request_rejects_bad_method():
     client = MCPClient()
     result = await client.send_http_request("FROBNICATE", "http://target.local/")
     assert "Unsupported HTTP method" in result["error"]
+
+
+
+async def test_send_http_request_read_error_is_crash_signal():
+    """
+    A mid-exchange connection DROP (ReadError) is treated as a suspected backend
+    crash -> a real lead, not swallowed noise. Regression for the trace where a
+    SQLi payload caused a ReadError that was hidden from the agent.
+    """
+    import httpx
+
+    client = MCPClient()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(side_effect=httpx.ReadError("dropped"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.send_http_request(
+            "POST", "http://target.local/login", json_body={"username": "' OR 1=1--"}
+        )
+
+    assert result["transport_error"] == "ReadError"
+    assert result["server_crash_suspected"] is True
+    assert result["is_server_error"] is True
+    assert "socket" in result["telemetry"].lower()
+
+
+async def test_send_http_request_connect_error_is_not_a_lead():
+    """
+    A plain can't-connect failure (ConnectError) is infrastructure noise, NOT a
+    suspected crash. Regression for the false 'php://filter RCE' on a filtered
+    port.
+    """
+    import httpx
+
+    client = MCPClient()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.request = AsyncMock(side_effect=httpx.ConnectError("refused"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.send_http_request("GET", "https://filtered.local/")
+
+    assert result["transport_error"] == "ConnectError"
+    assert result["server_crash_suspected"] is False
+    assert result["is_server_error"] is False
+
+
+async def test_run_fuzzer_read_error_flagged_as_anomaly():
+    """run_fuzzer now flags a ReadError (suspected crash) as an anomaly."""
+    import httpx
+
+    client = MCPClient()
+    payloads = [{"param": "username", "value": "' OR 1=1--"}]
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.ReadError("dropped"))
+        mock_client.post = AsyncMock(side_effect=httpx.ReadError("dropped"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.run_fuzzer("http://target.local/login", payloads, "body")
+
+    assert result["anomalies_found"] == 1
+    row = result["results"][0]
+    assert row["anomaly_detected"] is True
+    assert row["server_crash_suspected"] is True
+
+
+async def test_run_fuzzer_connect_error_not_anomaly():
+    """A plain ConnectError in run_fuzzer is still NOT an anomaly."""
+    import httpx
+
+    client = MCPClient()
+    payloads = [{"param": "q", "value": "x"}]
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        result = await client.run_fuzzer("https://filtered.local/", payloads, "query")
+
+    assert result["anomalies_found"] == 0
+    assert result["results"][0]["anomaly_detected"] is False

@@ -156,6 +156,115 @@ def _check_call_node(node: ast.Call) -> dict | None:
     return None
 
 
+# HTTP-method decorator names used by Flask / FastAPI route definitions.
+_HTTP_METHOD_DECORATORS = {"get", "post", "put", "patch", "delete", "head", "options"}
+
+
+def extract_routes(directory: str) -> list[dict]:
+    """
+    Extract declared HTTP routes from Flask / FastAPI source via the AST.
+
+    This is what kills the agent's "blind guessing" of commodity paths like
+    /api/v1/customers. By mapping the real, source-derived routes (e.g. from
+    @app.route("/login", methods=["POST"]) or @router.get("/items")), the DAST
+    phase can attack only endpoints that actually exist.
+
+    Returns a list of:
+        {"path": "/login", "methods": ["GET", "POST"], "handler": "login", "file": "app.py"}
+    """
+    routes: list[dict] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+
+    for root, dirs, files in os.walk(directory):
+        if ".git" in dirs:
+            dirs.remove(".git")
+        for filename in files:
+            if not filename.endswith(".py"):
+                continue
+            file_path = os.path.join(root, filename)
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    source = f.read()
+            except (OSError, IOError):
+                continue
+            try:
+                tree = ast.parse(source)
+            except SyntaxError:
+                continue
+
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for decorator in node.decorator_list:
+                    parsed = _parse_route_decorator(decorator)
+                    if parsed is None:
+                        continue
+                    path, methods = parsed
+                    key = (path, tuple(sorted(methods)))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    try:
+                        rel = os.path.relpath(file_path, directory)
+                    except ValueError:
+                        rel = file_path
+                    routes.append({
+                        "path": path,
+                        "methods": methods,
+                        "handler": node.name,
+                        "file": rel,
+                    })
+
+    routes.sort(key=lambda r: r["path"])
+    return routes
+
+
+def _parse_route_decorator(decorator: ast.expr) -> tuple[str, list[str]] | None:
+    """
+    Parse a single decorator node into (path, methods) if it is a route.
+
+    Handles Flask `@app.route("/x", methods=[...])`, the method-specific
+    shorthands `@app.get/post/...`, and FastAPI `@router.get("/x")`. The
+    receiver name (app, router, bp, blueprint, api, ...) is not constrained, so
+    blueprint/sub-router decorators are matched too.
+    """
+    if not isinstance(decorator, ast.Call):
+        return None
+    func = decorator.func
+    if not isinstance(func, ast.Attribute):
+        return None
+
+    method_name = func.attr.lower()
+    if method_name != "route" and method_name not in _HTTP_METHOD_DECORATORS:
+        return None
+
+    # The path must be a literal string first positional argument.
+    if not decorator.args:
+        return None
+    first = decorator.args[0]
+    if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+        return None
+    path = first.value
+    if not path.startswith("/"):
+        return None
+
+    if method_name == "route":
+        methods = ["GET"]
+        for kw in decorator.keywords:
+            if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                extracted = [
+                    elt.value.upper()
+                    for elt in kw.value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                ]
+                if extracted:
+                    methods = extracted
+    else:
+        methods = [method_name.upper()]
+
+    return path, methods
+
+
 def generate_vuln_hash(file_path: str, vuln_type: str, line_number: int) -> str:
     """Generate MD5(file_path + vulnerability_type + line_number) for deduplication."""
     raw = f"{file_path}{vuln_type}{line_number}"

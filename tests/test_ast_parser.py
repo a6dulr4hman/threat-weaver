@@ -5,6 +5,7 @@ import zipfile
 
 from app.services.ast_parser import (
     analyze_codebase,
+    extract_routes,
     extract_zip,
     filter_high_risk_files,
     generate_vuln_hash,
@@ -140,3 +141,89 @@ def test_filter_high_risk_files_budget_limit():
         assert len(result) > 0
         # Content should be truncated
         assert len(result[0]["content"]) <= 400
+
+
+
+def test_extract_routes_flask():
+    """extract_routes maps Flask @app.route decorators with methods."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        code = '''\
+from flask import Flask
+app = Flask(__name__)
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    return "login"
+
+@app.route("/dashboard")
+def dashboard():
+    return "dash"
+
+@app.route("/transfer", methods=["POST"])
+def transfer():
+    return "ok"
+'''
+        with open(os.path.join(tmpdir, "app.py"), "w") as f:
+            f.write(code)
+
+        routes = extract_routes(tmpdir)
+        by_path = {r["path"]: r for r in routes}
+
+        assert set(by_path) == {"/login", "/dashboard", "/transfer"}
+        assert sorted(by_path["/login"]["methods"]) == ["GET", "POST"]
+        # A bare @app.route defaults to GET.
+        assert by_path["/dashboard"]["methods"] == ["GET"]
+        assert by_path["/transfer"]["methods"] == ["POST"]
+        assert by_path["/login"]["handler"] == "login"
+
+
+def test_extract_routes_fastapi_shorthands():
+    """extract_routes handles FastAPI @router.get/@app.post shorthands."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        code = '''\
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get("/items")
+async def list_items():
+    return []
+
+@router.post("/items")
+async def create_item():
+    return {}
+'''
+        with open(os.path.join(tmpdir, "routes.py"), "w") as f:
+            f.write(code)
+
+        routes = extract_routes(tmpdir)
+        methods_by = {(r["path"], tuple(r["methods"])) for r in routes}
+
+        assert ("/items", ("GET",)) in methods_by
+        assert ("/items", ("POST",)) in methods_by
+
+
+def test_extract_routes_ignores_non_routes():
+    """Decorators that aren't routes (and non-literal paths) are skipped."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        code = '''\
+import functools
+
+@functools.lru_cache
+def helper():
+    return 1
+
+@app.route(some_variable)
+def dynamic():
+    return 2
+'''
+        with open(os.path.join(tmpdir, "misc.py"), "w") as f:
+            f.write(code)
+
+        routes = extract_routes(tmpdir)
+        assert routes == []
+
+
+def test_extract_routes_empty_dir():
+    """No Python files -> no routes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        assert extract_routes(tmpdir) == []

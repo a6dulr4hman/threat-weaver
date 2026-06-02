@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import AnalysisJob, Workspace
 from app.services.ast_parser import (
     analyze_codebase,
+    extract_routes,
     filter_high_risk_files,
     generate_vuln_hash,
 )
@@ -135,6 +136,7 @@ class OrchestratorFSM:
         analysis = await asyncio.to_thread(analyze_codebase, repo_dir)
         high_risk = await asyncio.to_thread(filter_high_risk_files, analysis)
         counts = await asyncio.to_thread(self._count_repo_files, repo_dir)
+        routes = await asyncio.to_thread(extract_routes, repo_dir)
 
         summary = []
         for item in high_risk:
@@ -152,6 +154,9 @@ class OrchestratorFSM:
             "python_files": counts["python"],
             "high_risk_count": len(high_risk),
             "high_risk_files": summary,
+            # Source-derived route map. The DAST phase attacks THESE endpoints
+            # instead of guessing commodity paths.
+            "routes": routes,
         }
 
         # Be honest about coverage: the AST/SAST layer is Python-only today.
@@ -160,7 +165,7 @@ class OrchestratorFSM:
                 "No Python source files were found in this repository. Static "
                 "code analysis (SAST) currently supports Python only, so no "
                 "code-level findings are available. Rely on the live DAST tools "
-                "(run_nmap, run_fuzzer, execute_safe_poc) against the target."
+                "(run_nmap, send_http_request) against the target."
             )
         return context
 
@@ -216,6 +221,7 @@ class OrchestratorFSM:
                 "target": target,
                 "attack_graph": self.attack_graph,
                 "code_analysis": self.attack_graph.get("code_analysis"),
+                "routes": (self.attack_graph.get("code_analysis") or {}).get("routes", []),
                 "endpoint_attempts": self.attack_graph.get("endpoint_attempts", {}),
                 "exhausted_endpoints": self.attack_graph.get("exhausted_endpoints", []),
                 "iteration": iteration,

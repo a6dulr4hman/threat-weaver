@@ -104,21 +104,26 @@ class MCPClient:
                         "transport_error": None,
                     })
                 except (httpx.TimeoutException, httpx.HTTPError) as e:
-                    # Connection-level failures (timeouts, refused connections,
-                    # TLS errors) are TRANSPORT problems, not application
-                    # vulnerabilities. Record them with status_code 0 but do
-                    # NOT count them as anomalies - otherwise an unreachable
-                    # https:// endpoint looks like a confirmed exploit, which is
-                    # exactly the false positive that led K2 to hallucinate an
-                    # RCE in earlier runs.
+                    # Distinguish a mid-exchange connection DROP (likely backend
+                    # crash on the payload -> a real lead) from a plain
+                    # can't-connect failure (filtered/unreachable -> noise).
                     elapsed_ms = (time.monotonic() - start_time) * 1000
+                    error_name = type(e).__name__
+                    crash_signal_errors = {
+                        "ReadError", "ReadTimeout", "RemoteProtocolError",
+                        "WriteError", "WriteTimeout", "ProtocolError",
+                    }
+                    server_crash_suspected = error_name in crash_signal_errors
+                    if server_crash_suspected:
+                        anomalies_found += 1
                     results.append({
                         "payload": payload,
                         "status_code": 0,
                         "response_length": 0,
                         "response_time_ms": round(elapsed_ms, 2),
-                        "anomaly_detected": False,
-                        "transport_error": type(e).__name__,
+                        "anomaly_detected": server_crash_suspected,
+                        "transport_error": error_name,
+                        "server_crash_suspected": server_crash_suspected,
                     })
 
         return {
@@ -196,8 +201,41 @@ class MCPClient:
             }
         except (httpx.TimeoutException, httpx.HTTPError) as e:
             elapsed_ms = (time.monotonic() - start_time) * 1000
-            # A transport failure is NOT an application vulnerability. Report it
-            # plainly so the model doesn't mistake an unreachable host for a hit.
+            error_name = type(e).__name__
+            # IMPORTANT distinction:
+            #   * A connection that is established and then DROPPED mid-exchange
+            #     (ReadError, RemoteProtocolError, WriteError, ReadTimeout) is a
+            #     strong signal the backend crashed on our payload - an unhandled
+            #     exception killed the worker before it could respond. The agent
+            #     should treat that parameter as a live lead.
+            #   * A failure to connect at all (ConnectError, ConnectTimeout,
+            #     PoolTimeout) just means the host/port is unreachable/filtered -
+            #     NOT an application vulnerability. (This was the false-positive
+            #     that once made the agent hallucinate an RCE on a filtered 443.)
+            crash_signal_errors = {
+                "ReadError",
+                "ReadTimeout",
+                "RemoteProtocolError",
+                "WriteError",
+                "WriteTimeout",
+                "ProtocolError",
+            }
+            server_crash_suspected = error_name in crash_signal_errors
+
+            if server_crash_suspected:
+                telemetry = (
+                    f"Payload caused a low-level socket {error_name}: the "
+                    "connection was dropped by the host before a response could be "
+                    "read. This often means the backend hit an unhandled exception "
+                    "and crashed on this input. Investigate this parameter further."
+                )
+            else:
+                telemetry = (
+                    f"Transport-level {error_name}: could not complete the request "
+                    "(host unreachable, connection refused, or filtered). This is "
+                    "an infrastructure condition, not an application flaw."
+                )
+
             return {
                 "status_code": 0,
                 "response_headers": {},
@@ -205,9 +243,12 @@ class MCPClient:
                 "body_truncated": False,
                 "response_length": 0,
                 "response_time_ms": round(elapsed_ms, 2),
-                "is_server_error": False,
+                # A suspected backend crash IS a server-side anomaly worth a pivot.
+                "is_server_error": server_crash_suspected,
                 "stack_trace_detected": False,
-                "transport_error": type(e).__name__,
+                "transport_error": error_name,
+                "server_crash_suspected": server_crash_suspected,
+                "telemetry": telemetry,
                 "error": f"Request failed: {e}",
             }
 

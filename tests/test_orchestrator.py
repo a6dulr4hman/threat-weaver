@@ -834,3 +834,57 @@ async def test_k2_agent_feed_note():
     assert agent.conversation_history[0]["role"] == "user"
     assert "[ORCHESTRATOR]" in agent.conversation_history[0]["content"]
     assert "exhausted" in agent.conversation_history[0]["content"]
+
+
+
+async def test_ingest_code_context_includes_routes(db_session, tmp_path, monkeypatch):
+    """_ingest_code_context surfaces a source-derived route map for the agent."""
+    import app.services.orchestrator as orch_mod
+
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id, target_url="http://target.com",
+        verification_nonce="n", verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+    job = AnalysisJob(
+        id=job_id, workspace_id=workspace_id, status="ready", attack_graph_data={}
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # Lay down a fake cloned repo at <REPO_BASE_DIR>/<workspace_id>/repo
+    repo_dir = tmp_path / workspace_id / "repo"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "app.py").write_text(
+        'from flask import Flask\n'
+        'app = Flask(__name__)\n'
+        '@app.route("/login", methods=["GET", "POST"])\n'
+        'def login():\n'
+        '    return "x"\n'
+    )
+    monkeypatch.setattr(orch_mod, "REPO_BASE_DIR", str(tmp_path))
+
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    context = await fsm._ingest_code_context()
+
+    assert context is not None
+    paths = {r["path"] for r in context["routes"]}
+    assert "/login" in paths
+
+
+def test_run_fuzzer_not_advertised_to_agent():
+    """Step 1: run_fuzzer is removed from the tool list K2 sees."""
+    from app.services.k2_agent import SYSTEM_PROMPT, K2Agent
+
+    agent = K2Agent(llm_client=MagicMock())
+    msg = agent.build_state_message({"routes": [{"path": "/login"}]})
+
+    assert "run_fuzzer" not in msg
+    assert "send_http_request" in msg
+    assert "/login" in msg
+    # The system prompt no longer offers run_fuzzer as a tool option.
+    assert "run_fuzzer" not in SYSTEM_PROMPT
