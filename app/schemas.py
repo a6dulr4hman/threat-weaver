@@ -55,6 +55,7 @@ class WorkspaceResponse(BaseModel):
     target_url: str
     verification_nonce: str
     verification_status: bool
+    github_repo_url: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -92,3 +93,18 @@ class RoutingConfigResponse(BaseModel):
     email_address: str
 
     model_config = {"from_attributes": True}
+
+
+class GitHubImportRequest(BaseModel):
+    repo_url: str
+
+    @field_validator("repo_url")
+    @classmethod
+    def validate_github_url(cls, v: str) -> str:
+        """Must match https://github.com/<owner>/<repo> pattern."""
+        pattern = r"^https://github\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/?$"
+        if not re.match(pattern, v):
+            raise ValueError(
+                "Must be a valid GitHub repository URL (https://github.com/owner/repo)"
+            )
+        return v.rstrip("/")

@@ -33,15 +33,17 @@
 </section>
 
 <section class="bg-white rounded-lg shadow p-6 mb-8">
-    <h2 class="text-xl font-semibold mb-4">Upload Source Archive</h2>
-    <form id="upload-form" enctype="multipart/form-data" class="flex items-center space-x-4">
-        <input type="file" name="file" accept=".zip"
-               class="border border-gray-300 rounded px-3 py-2">
+    <h2 class="text-xl font-semibold mb-4">Import GitHub Repository</h2>
+    <form id="import-repo-form" class="flex items-center space-x-4">
+        <input type="text" id="repo-url" name="repo_url"
+               placeholder="https://github.com/owner/repo"
+               class="border border-gray-300 rounded px-3 py-2 flex-1">
         <button type="submit"
                 class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
-            Upload
+            Import Repository
         </button>
     </form>
+    <p class="text-xs text-gray-500 mt-2">Enter a public GitHub repository URL to clone for analysis.</p>
 </section>
 
 <section class="bg-white rounded-lg shadow p-6">
@@ -82,16 +84,19 @@ document.getElementById('verify-btn').addEventListener('click', async () => {
     }
 });
 
-document.getElementById('upload-form').addEventListener('submit', async (e) => {
+document.getElementById('import-repo-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const form = e.target;
-    const formData = new FormData(form);
-    const response = await fetch('/api/workspaces/{{ workspace.id }}/upload', {
+    const repoUrl = document.getElementById('repo-url').value;
+    const response = await fetch('/api/workspaces/{{ workspace.id }}/import-repo', {
         method: 'POST',
-        body: formData
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({repo_url: repoUrl})
     });
     if (response.ok) {
-        alert('Upload successful');
+        alert('Repository imported successfully');
+    } else {
+        const data = await response.json();
+        alert('Import failed: ' + (data.detail || 'Unknown error'));
     }
 });
 </script>

@@ -10,6 +10,7 @@ class Workspace(Base):
     target_url = Column(String(255), nullable=False)
     verification_nonce = Column(String(64), nullable=False)
     verification_status = Column(Boolean, default=False)
+    github_repo_url = Column(String(500), nullable=True)
 
 
 class AnalysisJob(Base):

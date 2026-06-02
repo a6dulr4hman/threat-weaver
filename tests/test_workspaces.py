@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
@@ -160,3 +161,84 @@ async def test_create_workspace_rejects_private_ip(client):
         "/api/workspaces", json={"target_url": "localhost"}
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_import_repo_valid(client):
+    """Test that a valid GitHub URL triggers a successful clone."""
+    create_resp = await client.post(
+        "/api/workspaces", json={"target_url": "example.com"}
+    )
+    workspace_id = create_resp.json()["id"]
+
+    mock_process = AsyncMock()
+    mock_process.communicate = AsyncMock(return_value=(b"", b""))
+    mock_process.returncode = 0
+
+    with patch("app.routers.workspaces.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = mock_process
+        response = await client.post(
+            f"/api/workspaces/{workspace_id}/import-repo",
+            json={"repo_url": "https://github.com/owner/repo"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "cloned"
+    assert data["path"] == f"/tmp/threatweaver/{workspace_id}/repo"
+
+    # Verify the subprocess was called correctly
+    mock_exec.assert_called_once_with(
+        "git", "clone", "--depth", "1",
+        "https://github.com/owner/repo",
+        f"/tmp/threatweaver/{workspace_id}/repo",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_repo_invalid_url(client):
+    """Test that non-GitHub URLs are rejected with 422."""
+    create_resp = await client.post(
+        "/api/workspaces", json={"target_url": "example.com"}
+    )
+    workspace_id = create_resp.json()["id"]
+
+    # Not a GitHub URL
+    response = await client.post(
+        f"/api/workspaces/{workspace_id}/import-repo",
+        json={"repo_url": "https://gitlab.com/owner/repo"},
+    )
+    assert response.status_code == 422
+
+    # Missing owner/repo
+    response = await client.post(
+        f"/api/workspaces/{workspace_id}/import-repo",
+        json={"repo_url": "https://github.com/"},
+    )
+    assert response.status_code == 422
+
+    # HTTP instead of HTTPS
+    response = await client.post(
+        f"/api/workspaces/{workspace_id}/import-repo",
+        json={"repo_url": "http://github.com/owner/repo"},
+    )
+    assert response.status_code == 422
+
+    # Command injection attempt
+    response = await client.post(
+        f"/api/workspaces/{workspace_id}/import-repo",
+        json={"repo_url": "https://github.com/owner/repo; rm -rf /"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_import_repo_workspace_not_found(client):
+    """Test that importing to a nonexistent workspace returns 404."""
+    response = await client.post(
+        "/api/workspaces/nonexistent-id/import-repo",
+        json={"repo_url": "https://github.com/owner/repo"},
+    )
+    assert response.status_code == 404
