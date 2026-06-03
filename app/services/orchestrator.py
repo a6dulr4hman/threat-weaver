@@ -1,6 +1,7 @@
 """FSM-based orchestrator with K2-Think-v2 agentic loop."""
 import asyncio
 import os
+import re
 import time
 from enum import Enum
 
@@ -29,6 +30,13 @@ MAX_ATTACK_ATTEMPTS = 3
 # Tools that constitute an "attack attempt" against a specific endpoint and are
 # therefore subject to the per-endpoint budget above.
 ATTACK_TOOLS = {"send_http_request", "run_fuzzer"}
+
+# Source-derived routes that are never worth attacking: the root redirect,
+# logout (which just clears the session), and the ThreatWeaver ownership-
+# verification endpoint. They are excluded from the coverage checklist so the
+# agent isn't nudged to waste its attack budget on them and so an "all routes
+# probed" finish isn't blocked waiting on them.
+SKIP_ROUTE_PATHS = {"/", "/logout", "/threatweaver.txt"}
 
 # Cap on how many remediation patches a single job may generate.
 # Set to 7 to match the number of vulnerabilities in the Nimbus CRM demo target.
@@ -249,6 +257,9 @@ class OrchestratorFSM:
                     "attack_graph": self._slim_attack_graph(),
                     "code_analysis": self.attack_graph.get("code_analysis"),
                     "routes": (self.attack_graph.get("code_analysis") or {}).get("routes", []),
+                    # Source-derived coverage checklist: which routes still need
+                    # probing. This is what DRIVES the loop — see build_state_message.
+                    "route_progress": self._route_progress(),
                     "endpoint_attempts": self.attack_graph.get("endpoint_attempts", {}),
                     "exhausted_endpoints": self.attack_graph.get("exhausted_endpoints", []),
                     "iteration": iteration,
@@ -374,56 +385,54 @@ class OrchestratorFSM:
                             ).append(vuln_node)
                             await self._store_mitigation(vuln_node, result)
 
-                        # Nudge K2 to keep probing unprobed routes instead of
-                        # looping on more patches. Build the remaining list by
-                        # comparing route PATHS against endpoint_attempts keys
-                        # which are full URLs — strip the host to compare fairly.
-                        probed_paths = {
-                            k.split("/", 3)[-1].lstrip("/")
-                            if "/" in k.split("//", 1)[-1]
-                            else k
-                            for k in self.attack_graph.get("endpoint_attempts", {})
-                        }
-                        # Also add the paths of already-patched vulns.
-                        probed_paths.update(
-                            self.attack_graph.get("patched_nodes", [])
-                        )
-
+                        # Coverage driver: after a patch, push K2 toward the
+                        # next UNPROBED source-derived route instead of looping
+                        # on more patches. The route map (not HTML links) is the
+                        # authoritative attack surface. endpoint_attempts keys
+                        # are full URLs while route entries are paths, so
+                        # _unprobed_routes() normalises before comparing.
                         all_routes = (
                             self.attack_graph.get("code_analysis") or {}
                         ).get("routes", [])
-                        remaining = [
-                            r for r in all_routes
-                            if not any(
-                                r.get("path", "").lstrip("/") in pp or
-                                pp.lstrip("/") in r.get("path", "").lstrip("/")
-                                for pp in probed_paths
-                            )
-                            and r.get("path") not in ("/", "/logout", "/threatweaver.txt")
-                        ]
+                        remaining = self._unprobed_routes()
 
-                        if not remaining:
+                        # Only finish on coverage grounds when a route map EXISTS
+                        # and is genuinely exhausted. With no route map there is
+                        # nothing to exhaust — keep going and let the iteration /
+                        # time / patch budgets bound the run, rather than quitting
+                        # the instant an empty/missing list looks "done" (the bug
+                        # that capped live scans at a single finding).
+                        if all_routes and not remaining:
                             summary = (
                                 self.attack_graph.get("k2_summary")
-                                or "Analysis complete. All routes probed."
+                                or "Analysis complete. All source-derived routes probed."
                             )
                             self.attack_graph["k2_summary"] = summary
                             self._advance_to_complete()
                             await self.save_state()
                             break
 
-                        remaining_desc = ", ".join(
-                            f"{r['path']} [{','.join(r.get('methods',[]))}]"
-                            + (" (AUTH)" if r.get("requires_auth") else "")
-                            for r in remaining[:5]
-                        )
-                        agent.feed_note(
-                            f"Patch stored for '{vuln_node}'. "
-                            f"{len(remaining)} unprobed route(s) remain — "
-                            f"probe them next: {remaining_desc}. "
-                            "Use the active session cookie (already set). "
-                            "Do NOT call generate_patch again until you trigger a new anomaly."
-                        )
+                        if remaining:
+                            remaining_desc = ", ".join(
+                                f"{r['path']} [{','.join(r.get('methods', []))}]"
+                                + (" (AUTH)" if r.get("requires_auth") else "")
+                                for r in remaining[:6]
+                            )
+                            agent.feed_note(
+                                f"Patch stored for '{vuln_node}'. "
+                                f"{len(remaining)} source-derived route(s) are still "
+                                f"UNPROBED — probe them next: {remaining_desc}. "
+                                "Authenticate first for routes marked (AUTH); the "
+                                "session cookie persists across requests. Do NOT call "
+                                "generate_patch again until a NEW anomaly is triggered."
+                            )
+                        else:
+                            agent.feed_note(
+                                f"Patch stored for '{vuln_node}'. No source-derived "
+                                "route map is available — keep probing any endpoints "
+                                "you still have evidence for, then finish when no "
+                                "useful action remains."
+                            )
 
                     # Track PoC attempts so the guardrail above can cap them.
                     if tool_name == "execute_safe_poc":
@@ -808,3 +817,101 @@ class OrchestratorFSM:
             f"No anomaly on '{endpoint_key}' (attempt {attempts[endpoint_key]} of "
             f"{MAX_ATTACK_ATTEMPTS}, {remaining} left). Pivot your payload or move on."
         )
+
+    # --- Source-derived route coverage ------------------------------------
+
+    @staticmethod
+    def _url_to_path(url: str) -> str:
+        """
+        Reduce a full URL (or bare path) to its path component, dropping the
+        scheme, host, query string and fragment.
+
+        endpoint_attempts is keyed by full URLs (e.g. "http://host/customer/5")
+        while the route map is keyed by paths (e.g. "/customer/<cid>"), so both
+        must be normalised to path form before they can be compared.
+        """
+        if not url:
+            return "/"
+        s = url.split("?", 1)[0].split("#", 1)[0]
+        if "://" in s:
+            s = s.split("://", 1)[1]
+            slash = s.find("/")
+            s = s[slash:] if slash != -1 else "/"
+        if not s.startswith("/"):
+            s = "/" + s
+        return s
+
+    @staticmethod
+    def _route_path_matches(route_path: str, candidate_path: str) -> bool:
+        """
+        True if a concrete URL path matches a source-derived route template.
+
+        Flask `<cid>` / `<int:cid>` and FastAPI `{item_id}` path parameters are
+        treated as single-segment wildcards, so e.g. the probed path
+        "/customer/5" matches the route template "/customer/<cid>".
+        """
+        rp = (route_path or "/").rstrip("/") or "/"
+        cp = (candidate_path or "/").rstrip("/") or "/"
+        placeholder = "WILDCARDSEG"
+        templated = re.sub(r"<[^>]+>|\{[^}]+\}", placeholder, rp)
+        pattern = "^" + re.escape(templated).replace(placeholder, r"[^/]+") + "$"
+        return re.match(pattern, cp) is not None
+
+    def _probed_url_paths(self) -> set[str]:
+        """Path-normalised set of every endpoint that has seen an HTTP attempt."""
+        return {
+            self._url_to_path(key)
+            for key in self.attack_graph.get("endpoint_attempts", {})
+        }
+
+    def _unprobed_routes(self) -> list[dict]:
+        """
+        Source-derived routes that have NOT yet been hit by a real HTTP attempt.
+
+        Returns [] when no route map exists (there is nothing to drive coverage
+        from). Skips the non-attackable routes in SKIP_ROUTE_PATHS.
+        """
+        all_routes = (self.attack_graph.get("code_analysis") or {}).get("routes", [])
+        if not all_routes:
+            return []
+        probed = self._probed_url_paths()
+        remaining = []
+        for route in all_routes:
+            path = route.get("path", "")
+            if not path or path in SKIP_ROUTE_PATHS:
+                continue
+            if any(self._route_path_matches(path, p) for p in probed):
+                continue
+            remaining.append(route)
+        return remaining
+
+    def _route_progress(self) -> dict | None:
+        """
+        Build the per-iteration coverage checklist that makes the source-derived
+        route map the EXPLICIT driver of the agent loop (instead of the agent
+        following links it happens to see in HTML responses).
+
+        Returns None when there is no route map to drive from, so the agent
+        falls back to live DAST against the target.
+        """
+        all_routes = (self.attack_graph.get("code_analysis") or {}).get("routes", [])
+        if not all_routes:
+            return None
+        attackable = [
+            r for r in all_routes if r.get("path") not in SKIP_ROUTE_PATHS
+        ]
+        unprobed = self._unprobed_routes()
+        return {
+            "total_routes": len(all_routes),
+            "attackable_routes": len(attackable),
+            "probed": max(0, len(attackable) - len(unprobed)),
+            "unprobed_count": len(unprobed),
+            "unprobed_routes": [
+                {
+                    "path": r.get("path"),
+                    "methods": r.get("methods", []),
+                    "requires_auth": bool(r.get("requires_auth")),
+                }
+                for r in unprobed
+            ],
+        }
