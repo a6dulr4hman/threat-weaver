@@ -246,7 +246,7 @@ class OrchestratorFSM:
                 context = {
                     "phase": self.state.value,
                     "target": target,
-                    "attack_graph": self.attack_graph,
+                    "attack_graph": self._slim_attack_graph(),
                     "code_analysis": self.attack_graph.get("code_analysis"),
                     "routes": (self.attack_graph.get("code_analysis") or {}).get("routes", []),
                     "endpoint_attempts": self.attack_graph.get("endpoint_attempts", {}),
@@ -373,35 +373,56 @@ class OrchestratorFSM:
                                 "patched_nodes", []
                             ).append(vuln_node)
                             await self._store_mitigation(vuln_node, result)
-                        # After a patch, tell K2 to continue scanning other routes
-                        # rather than looping on generate_patch again. This is the
-                        # key to finding multiple vulnerabilities — we used to break
-                        # here, which meant only the first vuln was ever found.
+
+                        # Nudge K2 to keep probing unprobed routes instead of
+                        # looping on more patches. Build the remaining list by
+                        # comparing route PATHS against endpoint_attempts keys
+                        # which are full URLs — strip the host to compare fairly.
+                        probed_paths = {
+                            k.split("/", 3)[-1].lstrip("/")
+                            if "/" in k.split("//", 1)[-1]
+                            else k
+                            for k in self.attack_graph.get("endpoint_attempts", {})
+                        }
+                        # Also add the paths of already-patched vulns.
+                        probed_paths.update(
+                            self.attack_graph.get("patched_nodes", [])
+                        )
+
+                        all_routes = (
+                            self.attack_graph.get("code_analysis") or {}
+                        ).get("routes", [])
                         remaining = [
-                            r for r in (
-                                self.attack_graph.get("code_analysis") or {}
-                            ).get("routes", [])
+                            r for r in all_routes
                             if not any(
-                                ep in self.attack_graph.get("endpoint_attempts", {})
-                                for ep in [r.get("path", "")]
+                                r.get("path", "").lstrip("/") in pp or
+                                pp.lstrip("/") in r.get("path", "").lstrip("/")
+                                for pp in probed_paths
                             )
+                            and r.get("path") not in ("/", "/logout", "/threatweaver.txt")
                         ]
+
                         if not remaining:
-                            # All routes probed — we're done.
                             summary = (
                                 self.attack_graph.get("k2_summary")
-                                or f"Analysis complete. Patch generated for {vuln_node}."
+                                or "Analysis complete. All routes probed."
                             )
                             self.attack_graph["k2_summary"] = summary
                             self._advance_to_complete()
                             await self.save_state()
                             break
-                        # Routes remain — nudge K2 to continue, don't loop on patches.
+
+                        remaining_desc = ", ".join(
+                            f"{r['path']} [{','.join(r.get('methods',[]))}]"
+                            + (" (AUTH)" if r.get("requires_auth") else "")
+                            for r in remaining[:5]
+                        )
                         agent.feed_note(
-                            f"Patch stored for '{vuln_node}'. Continue probing other "
-                            f"routes. {len(remaining)} unprobed route(s) remain: "
-                            + ", ".join(r.get("path", "") for r in remaining[:5])
-                            + ". Do NOT call generate_patch again yet."
+                            f"Patch stored for '{vuln_node}'. "
+                            f"{len(remaining)} unprobed route(s) remain — "
+                            f"probe them next: {remaining_desc}. "
+                            "Use the active session cookie (already set). "
+                            "Do NOT call generate_patch again until you trigger a new anomaly."
                         )
 
                     # Track PoC attempts so the guardrail above can cap them.
@@ -448,6 +469,56 @@ class OrchestratorFSM:
         await self.save_state()
         return self.state
 
+    def _slim_attack_graph(self) -> dict:
+        """
+        Return a token-efficient view of the attack graph for K2's context.
+
+        Full HTTP response bodies (2-4KB each) accumulate fast and fill the
+        60k context window after ~10 iterations. K2 doesn't need the full body
+        history — it just needs to know what was tried, what was anomalous, and
+        whether the finding was confirmed. Strip bodies; keep signals.
+        """
+        slim_results = []
+        for entry in self.attack_graph.get("tool_results", []):
+            result = entry.get("result") or {}
+            tool = entry.get("tool", "")
+            slim_result = {}
+
+            if tool in ("send_http_request",):
+                # Keep signals, drop the body (can be 3KB of HTML).
+                slim_result = {
+                    k: v for k, v in result.items()
+                    if k not in ("body", "response_headers")
+                }
+            elif tool == "execute_safe_poc":
+                # Keep confirmation signal, drop full trace (can be huge).
+                slim_result = {
+                    "exploit_confirmed": result.get("exploit_confirmed"),
+                    "match_detail": result.get("match_detail"),
+                    "error": result.get("error"),
+                }
+            elif tool == "generate_patch":
+                # Keep metadata, drop the full code (saved to DB already).
+                slim_result = {
+                    k: v for k, v in result.items() if k != "patch"
+                }
+            else:
+                slim_result = result
+
+            slim_results.append({
+                "iteration": entry.get("iteration"),
+                "tool": tool,
+                "arguments": entry.get("arguments"),
+                "result": slim_result,
+                "reasoning": entry.get("reasoning"),
+            })
+
+        return {
+            k: (slim_results if k == "tool_results" else v)
+            for k, v in self.attack_graph.items()
+            if k not in ("code_analysis",)  # code_analysis passed separately
+        }
+
     def _advance_to_complete(self) -> None:
         """Advance FSM to COMPLETE through valid transitions."""
         state_chain = [
@@ -465,23 +536,33 @@ class OrchestratorFSM:
 
     def _score_severity(self) -> str:
         """
-        Grade the job's overall severity from the verified attack graph.
+        Grade the job's overall severity.
 
-        Counts confirmed exploits (PoC), suspected server crashes / 5xx, and
-        leaked stack traces across the recorded tool results, then maps the
-        total onto Low / Medium / High / Extreme.
+        Priority order:
+        1. Highest risk_level from generate_patch results (most accurate — K2
+           assessed the actual vulnerability type and business impact).
+        2. SAST high-risk file count from code analysis.
+        3. Raw DAST anomaly/confirmed-exploit counts as a fallback.
         """
+        risk_order = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+        highest_patch_risk = 0
         confirmed = 0
         anomalies = 0
+
         for entry in self.attack_graph.get("tool_results", []):
             result = entry.get("result") or {}
             if not isinstance(result, dict):
                 continue
-            if entry.get("tool") == "execute_safe_poc" and result.get(
-                "exploit_confirmed"
-            ):
+            tool = entry.get("tool", "")
+
+            if tool == "generate_patch":
+                level = str(result.get("risk_level", "")).lower()
+                highest_patch_risk = max(
+                    highest_patch_risk, risk_order.get(level, 0)
+                )
+            elif tool == "execute_safe_poc" and result.get("exploit_confirmed"):
                 confirmed += 1
-            if (
+            elif tool in ("send_http_request", "run_fuzzer") and (
                 result.get("is_server_error")
                 or result.get("stack_trace_detected")
                 or result.get("server_crash_suspected")
@@ -489,6 +570,22 @@ class OrchestratorFSM:
             ):
                 anomalies += 1
 
+        # Patch-derived risk is most trustworthy — use it if available.
+        if highest_patch_risk >= 4:
+            return "extreme"
+        if highest_patch_risk == 3:
+            return "high"
+        if highest_patch_risk == 2:
+            return "medium"
+
+        # SAST-derived: many high-risk files → at least high severity.
+        sast_high = (self.attack_graph.get("code_analysis") or {}).get(
+            "high_risk_count", 0
+        )
+        if sast_high >= 3:
+            return "high"
+
+        # DAST fallback.
         if confirmed >= 1 and anomalies >= 3:
             return "extreme"
         if confirmed >= 1:
