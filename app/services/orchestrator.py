@@ -288,6 +288,30 @@ class OrchestratorFSM:
                         await self.save_state()
                         continue
 
+                    # Guardrail: cap PoC verification to prevent the agent
+                    # from looping on execute_safe_poc indefinitely.
+                    # Each call runs a 30s subprocess; 10 calls = 5 minutes
+                    # stuck at the PoC Verify step before any other check fires.
+                    if tool_name == "execute_safe_poc":
+                        poc_count = self.attack_graph.get("poc_attempts", 0)
+                        sandbox_id = (arguments.get("sandbox_id") or "").strip()
+                        completed_pocs = self.attack_graph.get("completed_pocs", [])
+                        if sandbox_id and sandbox_id in completed_pocs:
+                            agent.feed_note(
+                                f"PoC '{sandbox_id}' already ran. Do not repeat it. "
+                                "Move to generate_patch if confirmed, or finish."
+                            )
+                            await self.save_state()
+                            continue
+                        if poc_count >= 3:
+                            agent.feed_note(
+                                "PoC verification budget reached (3 attempts). "
+                                "Accept the evidence you have and move to "
+                                "generate_patch or finish."
+                            )
+                            await self.save_state()
+                            continue
+
                     # Guardrail: bound remediation so the agent can't loop
                     # forever on generate_patch. Also enforce that patches are
                     # only generated for findings that were actually observed
@@ -353,6 +377,17 @@ class OrchestratorFSM:
                                 "patched_nodes", []
                             ).append(vuln_node)
                             await self._store_mitigation(vuln_node, result)
+
+                    # Track PoC attempts so the guardrail above can cap them.
+                    if tool_name == "execute_safe_poc":
+                        self.attack_graph["poc_attempts"] = (
+                            self.attack_graph.get("poc_attempts", 0) + 1
+                        )
+                        sandbox_id = (arguments.get("sandbox_id") or "").strip()
+                        if sandbox_id:
+                            self.attack_graph.setdefault(
+                                "completed_pocs", []
+                            ).append(sandbox_id)
 
                     # Per-endpoint attack budget: count the attempt; if the
                     # endpoint is now exhausted (or close), tell the agent.

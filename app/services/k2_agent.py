@@ -97,9 +97,10 @@ GUARDRAILS (important):
   exploit_confirmed=true. If you have not observed one of those signals for a
   specific finding, do NOT generate a patch for it.
 
-CRITICAL SYSTEM DIRECTIVE: You are generating a patch for human review. You DO NOT have execution access to hot-reload or deploy code to the live target server. 
-
-Once you have generated the patch using the `generate_patch` tool, DO NOT attempt to verify the fix using `send_http_request` or any active network tools. The live server will still be vulnerable. After generating the patch, immediately output the string "PHASE_COMPLETE" to terminate the FSM loop.
+CRITICAL SYSTEM DIRECTIVE: You are generating a patch for human review only. You DO NOT have
+execution access to the live target server. After generating a patch, finish immediately with
+{"action": "complete", "summary": "..."} - do NOT output "PHASE_COMPLETE" or any other plain
+string, and do NOT run more network tools to verify the fix.
 
 Output rules (critical):
 - The final line of your reply must be a single valid JSON object.
