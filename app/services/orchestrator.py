@@ -1,5 +1,6 @@
 """FSM-based orchestrator with K2-Think-v2 agentic loop."""
 import asyncio
+import json
 import os
 import re
 import time
@@ -16,6 +17,7 @@ from app.services.ast_parser import (
     generate_vuln_hash,
 )
 from app.services.llm_client import LLMClient
+from app.services.llm_json import extract_json_object, is_api_error
 from app.services.mcp_client import MCPClient
 
 # Where imported GitHub repos are cloned (see routers/workspaces.py import-repo).
@@ -50,6 +52,44 @@ MAX_PATCHES = 7
 DEFAULT_CYCLE_BUDGET_SECONDS = float(
     os.getenv("CYCLE_BUDGET_SECONDS", "300")
 )
+
+
+# System prompt for the FINAL assessment pass. After the agentic loop ends, we
+# hand K2-Think-v2 a compact digest of everything the scan observed and ask it
+# to act as the lead assessor: count the vulnerabilities, rate each one, and
+# write the executive verdict. It must reason ONLY from the supplied evidence.
+FINAL_ASSESSMENT_PROMPT = """You are K2-Think-v2 acting as the lead security \
+assessor writing the FINAL verdict for an automated penetration test. You are \
+given a JSON digest of everything the autonomous scan actually did and observed \
+against ONE target: recon services, every exploitation signal it triggered, \
+confirmed sandbox PoCs, and any patches it generated.
+
+Produce a concise, accurate vulnerability assessment. Base EVERY conclusion \
+STRICTLY on the supplied evidence. Do NOT invent vulnerabilities the evidence \
+does not support, and never rate a service/version as vulnerable without an \
+observed exploitation signal. If the scan observed nothing exploitable, say so \
+honestly with total_vulnerabilities = 0 and overall_risk "Informational".
+
+Reply with EXACTLY ONE JSON object and nothing else (no prose, no markdown):
+{
+  "total_vulnerabilities": <integer>,
+  "overall_risk": "Critical" | "High" | "Medium" | "Low" | "Informational",
+  "executive_summary": "<2-4 sentence plain-English verdict for a CISO>",
+  "vulnerabilities": [
+    {
+      "name": "<short title, e.g. 'SQLi authentication bypass on /login'>",
+      "category": "<class, e.g. 'SQL Injection', 'Path Traversal', 'OS Command Injection', 'Broken Authentication'>",
+      "endpoint": "<method + path it was observed on>",
+      "severity": "Critical" | "High" | "Medium" | "Low",
+      "cvss": <number 0.0-10.0>,
+      "confidence": "Confirmed" | "Likely" | "Possible",
+      "evidence": "<the concrete observation that proves it>",
+      "impact": "<what an attacker gains>",
+      "remediation": "<the fix in one sentence>"
+    }
+  ]
+}
+Order vulnerabilities from most to least severe. Be factual and specific."""
 
 
 class FSMState(str, Enum):
@@ -681,6 +721,13 @@ class OrchestratorFSM:
         severity = self._score_severity()
         self.attack_graph["overall_severity"] = severity
 
+        # Final K2 verdict: enumerate + rate the vulnerabilities from the
+        # evidence gathered this run. Best-effort — never blocks finalization
+        # or the report if the model/network is unavailable (returns None).
+        assessment = await self._generate_final_assessment()
+        if assessment:
+            self.attack_graph["final_assessment"] = assessment
+
         # Persist severity onto the job row too.
         stmt = select(AnalysisJob).where(AnalysisJob.id == self.job_id)
         result = await self.db.execute(stmt)
@@ -1032,3 +1079,102 @@ class OrchestratorFSM:
                 for r in unprobed
             ],
         }
+
+    # --- Final K2 vulnerability assessment --------------------------------
+
+    async def _build_assessment_evidence(self) -> dict:
+        """
+        Assemble a compact, token-friendly digest of everything the scan
+        observed, for the final K2 assessment pass. Includes only signals
+        (not full HTML bodies): recon services, the exploitation findings our
+        detectors recognised, confirmed PoCs, generated patches, the route map
+        and which endpoints were probed.
+        """
+        observed: list[dict] = []
+        recon_services: list[dict] = []
+        confirmed_pocs: list[dict] = []
+
+        for entry in self.attack_graph.get("tool_results", []):
+            tool = entry.get("tool", "")
+            result = entry.get("result") or {}
+            args = entry.get("arguments") or {}
+            if not isinstance(result, dict):
+                continue
+
+            if tool == "run_nmap":
+                for svc in result.get("results", []) or []:
+                    recon_services.append({
+                        "port": svc.get("port"),
+                        "service": svc.get("service"),
+                        "version": svc.get("version"),
+                    })
+                continue
+
+            label = self._dast_finding(tool, args, result)
+            if label:
+                observed.append({
+                    "type": label,
+                    "method": args.get("method"),
+                    "endpoint": args.get("endpoint") or args.get("url"),
+                    "payload": args.get("params")
+                    or args.get("form_data")
+                    or args.get("json_body"),
+                    "status_code": result.get("status_code"),
+                    "evidence": (result.get("telemetry") or "")[:300],
+                })
+
+            if tool == "execute_safe_poc" and result.get("exploit_confirmed"):
+                confirmed_pocs.append({
+                    "sandbox_id": args.get("sandbox_id"),
+                    "detail": (result.get("match_detail") or "")[:300],
+                })
+
+        routes = (self.attack_graph.get("code_analysis") or {}).get("routes", [])
+        return {
+            "target": await self._get_workspace_target(),
+            "heuristic_severity": self._score_severity(),
+            "recon_services": recon_services,
+            "observed_exploitation_signals": observed,
+            "confirmed_pocs": confirmed_pocs,
+            "patches_generated": self.attack_graph.get("patched_nodes", []),
+            "endpoints_probed": list(
+                self.attack_graph.get("endpoint_attempts", {}).keys()
+            ),
+            "route_map": [r.get("path") for r in routes],
+            "agent_summary": self.attack_graph.get("k2_summary", ""),
+        }
+
+    async def _generate_final_assessment(self) -> dict | None:
+        """
+        Final pass: hand K2-Think-v2 a digest of everything the scan observed
+        and ask it to enumerate and rate the vulnerabilities (count, severity,
+        CVSS, impact, remediation).
+
+        Best-effort and offline-safe:
+        - Uses its OWN LLMClient so it never disturbs a mocked self.llm_client
+          (and its call-count assertions) in unit tests.
+        - Skipped entirely when no API key is configured (e.g. tests / local
+          runs without K2 credentials).
+        - Bounded by a timeout and never propagates an exception, so a slow or
+          unavailable model can't block finalization or the PDF report.
+        """
+        client = LLMClient()
+        if not client.api_key:
+            return None
+        try:
+            evidence = await self._build_assessment_evidence()
+            messages = [
+                {"role": "system", "content": FINAL_ASSESSMENT_PROMPT},
+                {"role": "user", "content": json.dumps(evidence, default=str)},
+            ]
+            raw = await asyncio.wait_for(
+                client.chat(messages, role="agent"), timeout=120.0
+            )
+        except Exception:
+            return None
+        if not isinstance(raw, str) or is_api_error(raw):
+            return None
+        parsed = extract_json_object(raw)
+        if not isinstance(parsed, dict) or "total_vulnerabilities" not in parsed:
+            return None
+        return parsed

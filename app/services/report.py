@@ -189,6 +189,7 @@ def build_report_data(attack_graph: dict, severity: str) -> dict:
     return {
         "summary": attack_graph.get("k2_summary") or "",
         "severity": severity,
+        "assessment": attack_graph.get("final_assessment"),
         "findings": list(findings_by_key.values()),
         "recon_ports": recon_ports,
         "remediations": remediations,
@@ -344,6 +345,61 @@ class ReportService:
         if data.get("summary"):
             story.append(Paragraph("Executive Summary", sty["h2"]))
             story.append(Paragraph(_esc(data["summary"]), sty["body"]))
+
+        # ── K2-Think-v2 Security Assessment (final verdict) ─────────── #
+        assessment = data.get("assessment")
+        if isinstance(assessment, dict):
+            story.append(Paragraph("K2-Think-v2 Security Assessment", sty["h2"]))
+            total = assessment.get("total_vulnerabilities")
+            risk = str(assessment.get("overall_risk", "n/a"))
+            story.append(Paragraph(
+                f"Vulnerabilities identified: <b>{_esc(total)}</b> &nbsp;&middot;&nbsp; "
+                f"Overall risk: <b>{_esc(risk)}</b>",
+                sty["body"],
+            ))
+            if assessment.get("executive_summary"):
+                story.append(Spacer(1, 3))
+                story.append(Paragraph(_esc(assessment["executive_summary"]), sty["body"]))
+
+            vulns = [v for v in (assessment.get("vulnerabilities") or []) if isinstance(v, dict)]
+            if vulns:
+                rows = [[
+                    Paragraph("<b>#</b>", sty["label"]),
+                    Paragraph("<b>Vulnerability</b>", sty["label"]),
+                    Paragraph("<b>Severity</b>", sty["label"]),
+                    Paragraph("<b>CVSS</b>", sty["label"]),
+                    Paragraph("<b>Confidence</b>", sty["label"]),
+                ]]
+                for i, v in enumerate(vulns, 1):
+                    title = v.get("name") or v.get("category") or "Finding"
+                    endpoint = v.get("endpoint")
+                    label_txt = _safe_text(title)
+                    if endpoint:
+                        label_txt += f"<br/><font size=7 color='#64748b'>{_safe_text(endpoint)}</font>"
+                    rows.append([
+                        Paragraph(str(i), sty["body"]),
+                        Paragraph(label_txt, sty["body"]),
+                        Paragraph(_safe_text(v.get("severity", "")), sty["body"]),
+                        Paragraph(_safe_text(v.get("cvss", "")), sty["body"]),
+                        Paragraph(_safe_text(v.get("confidence", "")), sty["body"]),
+                    ])
+                t = Table(
+                    rows,
+                    colWidths=[0.3 * inch, _TEXT_WIDTH - 2.55 * inch,
+                               0.85 * inch, 0.55 * inch, 0.85 * inch],
+                    hAlign="LEFT",
+                )
+                t.setStyle(TableStyle([
+                    ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+                    ("FONTSIZE",      (0, 0), (-1, -1), 8),
+                    ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+                    ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+                    ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+                ]))
+                story.append(Spacer(1, 4))
+                story.append(t)
 
         # ── Findings ──────────────────────────────────────────────── #
         findings = data.get("findings", [])
