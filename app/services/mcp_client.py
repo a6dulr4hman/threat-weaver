@@ -9,6 +9,13 @@ import httpx
 class MCPClient:
     """Model Context Protocol client for sandboxed tool execution."""
 
+    def __init__(self):
+        # Persistent cookie jar shared across all send_http_request calls in
+        # this job. This lets K2 log in once and then probe authenticated
+        # endpoints — without it every request is unauthenticated and all
+        # protected routes just redirect to /login.
+        self._cookies: httpx.Cookies = httpx.Cookies()
+
     async def run_nmap(self, target_domain: str, port_range: str) -> dict:
         """
         Spawn async subprocess with nmap against target.
@@ -168,7 +175,7 @@ class MCPClient:
         start_time = time.monotonic()
         try:
             async with httpx.AsyncClient(
-                timeout=30.0, follow_redirects=True
+                timeout=30.0, follow_redirects=True, cookies=self._cookies
             ) as client:
                 resp = await client.request(
                     method,
@@ -177,6 +184,8 @@ class MCPClient:
                     json=json_body if json_body is not None else None,
                     params=params or None,
                 )
+            # Persist any Set-Cookie headers so subsequent calls stay authenticated.
+            self._cookies.update(resp.cookies)
             elapsed_ms = (time.monotonic() - start_time) * 1000
             body = resp.text or ""
             truncated = len(body) > max_body_chars
@@ -190,6 +199,7 @@ class MCPClient:
             return {
                 "status_code": resp.status_code,
                 "response_headers": dict(resp.headers),
+                "cookies": dict(self._cookies),
                 "body": body_snippet,
                 "body_truncated": truncated,
                 "response_length": len(body),

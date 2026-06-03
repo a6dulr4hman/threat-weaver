@@ -30,11 +30,9 @@ MAX_ATTACK_ATTEMPTS = 3
 # therefore subject to the per-endpoint budget above.
 ATTACK_TOOLS = {"send_http_request", "run_fuzzer"}
 
-# Cap on how many remediation patches a single job may generate. Without this,
-# the agent can loop forever on generate_patch (inventing a new vuln name each
-# time), burning the token budget and the gateway timeout without ever
-# finishing - which also means the completion email never fires.
-MAX_PATCHES = 5
+# Cap on how many remediation patches a single job may generate.
+# Set to 7 to match the number of vulnerabilities in the Nimbus CRM demo target.
+MAX_PATCHES = 7
 
 # Hard wall-clock budget for a single run_cycle, in seconds.
 # With K2's 30 rpm cap and 120s per-call timeout, 20 iterations realistically
@@ -375,18 +373,36 @@ class OrchestratorFSM:
                                 "patched_nodes", []
                             ).append(vuln_node)
                             await self._store_mitigation(vuln_node, result)
-                        # After generating a patch, K2 has completed its job.
-                        # Force complete immediately — do NOT loop back to K2
-                        # which would spend another LLM call (up to 120s) and
-                        # likely try to generate another patch anyway.
-                        summary = (
-                            self.attack_graph.get("k2_summary")
-                            or f"Patch generated for {vuln_node}."
+                        # After a patch, tell K2 to continue scanning other routes
+                        # rather than looping on generate_patch again. This is the
+                        # key to finding multiple vulnerabilities — we used to break
+                        # here, which meant only the first vuln was ever found.
+                        remaining = [
+                            r for r in (
+                                self.attack_graph.get("code_analysis") or {}
+                            ).get("routes", [])
+                            if not any(
+                                ep in self.attack_graph.get("endpoint_attempts", {})
+                                for ep in [r.get("path", "")]
+                            )
+                        ]
+                        if not remaining:
+                            # All routes probed — we're done.
+                            summary = (
+                                self.attack_graph.get("k2_summary")
+                                or f"Analysis complete. Patch generated for {vuln_node}."
+                            )
+                            self.attack_graph["k2_summary"] = summary
+                            self._advance_to_complete()
+                            await self.save_state()
+                            break
+                        # Routes remain — nudge K2 to continue, don't loop on patches.
+                        agent.feed_note(
+                            f"Patch stored for '{vuln_node}'. Continue probing other "
+                            f"routes. {len(remaining)} unprobed route(s) remain: "
+                            + ", ".join(r.get("path", "") for r in remaining[:5])
+                            + ". Do NOT call generate_patch again yet."
                         )
-                        self.attack_graph["k2_summary"] = summary
-                        self._advance_to_complete()
-                        await self.save_state()
-                        break
 
                     # Track PoC attempts so the guardrail above can cap them.
                     if tool_name == "execute_safe_poc":

@@ -213,6 +213,7 @@ def extract_routes(directory: str) -> list[dict]:
                         "methods": methods,
                         "handler": node.name,
                         "file": rel,
+                        "requires_auth": _function_uses_login_required(node),
                     })
 
     routes.sort(key=lambda r: r["path"])
@@ -263,6 +264,31 @@ def _parse_route_decorator(decorator: ast.expr) -> tuple[str, list[str]] | None:
         methods = [method_name.upper()]
 
     return path, methods
+
+
+def _function_uses_login_required(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Heuristic: does this route handler have a login_required-style decorator?"""
+    for decorator in node.decorator_list:
+        # Skip the route decorator itself.
+        if isinstance(decorator, ast.Call):
+            func = decorator.func
+            name = (func.attr if isinstance(func, ast.Attribute) else
+                    func.id if isinstance(func, ast.Name) else "")
+        elif isinstance(decorator, ast.Name):
+            name = decorator.id
+        elif isinstance(decorator, ast.Attribute):
+            name = decorator.attr
+        else:
+            name = ""
+        name_lower = name.lower()
+        # Common auth decorator names across Flask/FastAPI/Django.
+        if any(k in name_lower for k in (
+            "login_required", "require_auth", "authenticated",
+            "auth_required", "jwt_required", "token_required",
+            "requires_auth", "login_check",
+        )):
+            return True
+    return False
 
 
 def generate_vuln_hash(file_path: str, vuln_type: str, line_number: int) -> str:
