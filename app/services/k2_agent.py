@@ -46,10 +46,15 @@ CORE METHOD - the Context-Aware Exploitation Loop (ReAct):
 request at a time, read the exact response, and engineer the NEXT payload from
 what you observed. Adapt sequentially - do not request batch payload sweeps.
 
-1. OBSERVE: Use the source-derived route map (provided as `routes`) to pick a
-   REAL endpoint and its expected inputs. NEVER guess commodity paths like
-   /api/v1/customers - if it is not in `routes` or the code analysis, it almost
-   certainly does not exist (you will just collect 404s).
+1. OBSERVE: Use the source-derived route map (provided as `routes`, with a live
+   coverage checklist in `route_progress` / `coverage_directive`) to pick a REAL
+   endpoint and its expected inputs. The route map — NOT links or forms in HTML
+   responses — is your authoritative attack surface: admin tools, detail/lookup
+   views and report builders frequently exist ONLY in source and never appear as
+   a clickable link, so navigating by HTML alone silently misses most routes.
+   Work the checklist until every UNPROBED route has been attacked. NEVER guess
+   commodity paths like /api/v1/customers - if it is not in `routes` or the code
+   analysis, it almost certainly does not exist (you will just collect 404s).
 2. REASON: Infer a SPECIFIC flaw from the business logic, not a generic attack.
    Example: <think>The /transfer handler has no validation on `amount`. I will
    send a negative value to attempt a reverse-transfer.</think>
@@ -60,6 +65,11 @@ what you observed. Adapt sequentially - do not request batch payload sweeps.
        (ReadError / RemoteProtocolError). STRONG lead - the backend likely hit
        an unhandled exception on this input. Dig into that exact parameter.
      - reflected input, auth-state changes, or error strings in the body.
+   CLASSIFY BY THE OBSERVED TRIGGER, not by guesswork. A 500 / DB error caused
+   by injecting a single quote (') or other SQL metacharacters into a parameter
+   is SQL injection, NOT XSS — XSS means your markup was reflected verbatim into
+   a 200 response, not that the server errored. Label the finding by the exact
+   input that broke it and the exact behaviour you saw.
 5. PIVOT: On a 500 or a connection drop, read what leaked, identify the parser
    or validation that broke, adjust your syntax, and fire a refined payload.
 
@@ -69,6 +79,14 @@ generate_patch. Map run_nmap service banners to CVEs with query_hackclub.
 USING execute_safe_poc (critical for confirmation):
 The script you provide runs in a sandboxed Python subprocess. To confirm an
 exploit you MUST make the script's verdict machine-readable:
+- REPRODUCE THE EXACT TRIGGERING PAYLOAD. The PoC must replay the SAME parameter
+  and the SAME characters that produced the anomaly (e.g. the single quote `'`
+  that broke the SQL query), against the SAME endpoint, and assert the SAME
+  signal you observed (status 500 / DB error / dropped connection). Do NOT swap
+  in a different vulnerability class's payload: sending a quote-free `<script>`
+  string to an endpoint that 500-ed on a quote will return 200 and FALSELY
+  report exploit_confirmed=false. The PoC must trigger the original bug, not a
+  generic one.
 - `import json` at the top of the script.
 - As the script's ABSOLUTE FINAL action, print ONE JSON dictionary to stdout,
   e.g. print(json.dumps({"server_crash": True})) or
@@ -149,10 +167,11 @@ class K2Agent:
         Hydrates the current state of the Finite State Machine (FSM) into a string 
         format digestible by the LLM. 
         """
-        return json.dumps({
+        state = {
             "current_phase": context.get("phase", "ready"),
             "target": context.get("target"),
             "routes": context.get("routes", []),
+            "route_progress": context.get("route_progress"),
             "code_analysis": context.get("code_analysis"),
             "attack_graph": context.get("attack_graph", {}),
             "endpoint_attempts": context.get("endpoint_attempts", {}),
@@ -162,7 +181,39 @@ class K2Agent:
                 "run_nmap", "send_http_request",
                 "execute_safe_poc", "query_hackclub", "generate_patch",
             ],
-        }, indent=2)
+        }
+
+        # Make the source-derived route map the EXPLICIT driver every iteration:
+        # an unambiguous coverage checklist the agent must work through, rather
+        # than a passive list it tends to ignore in favour of HTML links. Many
+        # routes (admin tools, detail/lookup views, report builders) exist ONLY
+        # in source and never appear as links on a page, so link-following alone
+        # silently misses most of the attack surface.
+        rp = context.get("route_progress")
+        if rp and rp.get("unprobed_routes"):
+            unprobed_desc = "; ".join(
+                f"{r['path']} [{','.join(r.get('methods', []))}]"
+                + (" (AUTH)" if r.get("requires_auth") else "")
+                for r in rp["unprobed_routes"]
+            )
+            state["coverage_directive"] = (
+                f"ROUTE COVERAGE CHECKLIST: {rp.get('attackable_routes')} attackable "
+                f"routes exist in the source map; you have probed {rp.get('probed')}. "
+                f"{rp.get('unprobed_count')} route(s) are still UNPROBED: {unprobed_desc}. "
+                "This source-derived map is your authoritative attack surface — do NOT "
+                "navigate by links or form actions in HTML responses; those hide routes "
+                "that exist only in code. Send a crafted send_http_request to EACH "
+                "unprobed route (log in first for routes marked AUTH, then reuse the "
+                "persistent session cookie) before you consider the analysis complete."
+            )
+        elif rp is not None:
+            state["coverage_directive"] = (
+                "ROUTE COVERAGE CHECKLIST: every source-derived route has been probed. "
+                "Confirm and patch any outstanding findings, then finish with "
+                '{"action": "complete", ...}.'
+            )
+
+        return json.dumps(state, indent=2)
 
     async def decide(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
