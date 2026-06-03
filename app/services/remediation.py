@@ -21,34 +21,70 @@ class RemediationService:
         """
         Extract the actual patched code from a K2-Think-v2 response.
 
-        K2 is a reasoning model: it emits a long <think>...</think> monologue
-        ("We need to respond with only the fixed code...") followed by the real
-        answer, often inside a ```python fenced block. The raw text was being
-        stored/returned verbatim, which is why patches looked like rambling
-        prose. This strips the reasoning and prefers the LAST fenced code block
-        (the final answer), falling back to the de-thought text.
+        K2 wraps output in various XML-like tags (<think>, <tool_call>, etc.)
+        and sometimes echoes the prompt. This aggressively strips all of that
+        and returns only the actual code.
         """
         if not raw:
             return ""
         text = raw.strip()
 
-        # Drop chain-of-thought reasoning blocks.
+        # 1. Strip ALL XML-like wrapper tags K2 uses (think, tool_call, etc.)
         text = re.sub(
-            r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE
-        )
-        lower = text.lower()
-        if "</think>" in lower:  # unbalanced/truncated reasoning tag
-            text = text[lower.rfind("</think>") + len("</think>"):]
-        text = re.sub(r"<think>", "", text, flags=re.IGNORECASE).strip()
+            r"</?(?:think|tool_call|response|answer|output|result)[^>]*>",
+            " ", text, flags=re.IGNORECASE,
+        ).strip()
 
-        # Prefer the last fenced code block - reasoning models put the final
-        # answer at the end.
+        # 2. If the response contains a JSON object with a "code" field,
+        #    extract the code value directly — this is the structured finding
+        #    format where the code is already inside a JSON key.
+        import json as _json
+        code_pattern = re.compile(r'\{[^{}]*"code"\s*:\s*"', re.DOTALL)
+        if code_pattern.search(text):
+            # Find all balanced JSON objects and look for one with "code".
+            for match in re.finditer(r"\{", text):
+                start = match.start()
+                depth = 0
+                for i in range(start, len(text)):
+                    if text[i] == "{":
+                        depth += 1
+                    elif text[i] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                obj = _json.loads(text[start:i + 1])
+                                if isinstance(obj, dict) and "code" in obj:
+                                    code = str(obj["code"]).strip()
+                                    if code:
+                                        return code
+                            except (ValueError, _json.JSONDecodeError):
+                                pass
+                            break
+
+        # 3. Prefer the last fenced code block.
         blocks = re.findall(
-            r"```(?:python|py)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE
+            r"```(?:python|py|c|javascript|js|bash)?\s*(.*?)```",
+            text, flags=re.DOTALL | re.IGNORECASE,
         )
         if blocks:
             return blocks[-1].strip()
-        return text.strip()
+
+        # 4. Find the first line that looks like code and return from there.
+        #    This handles: prompt echoes before code, reasoning text before code,
+        #    and plain code that starts on line 1.
+        code_starters = (
+            "import ", "from ", "def ", "class ", "#", "//", "/*",
+            "char ", "int ", "void ", "if ", "for ", "while ",
+            "const ", "let ", "var ", "function ", "async ",
+            "query ", "cursor", "conn", "app.", "@app",
+        )
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            stripped = line.strip().lower()
+            if stripped and any(stripped.startswith(s) for s in code_starters):
+                return "\n".join(lines[i:]).strip()
+
+        return ""
 
     async def generate_patch(
         self, job_id: str, vuln_node: str, source_code: str

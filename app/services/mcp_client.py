@@ -145,20 +145,16 @@ class MCPClient:
         endpoint: str,
         headers: dict | None = None,
         json_body: dict | None = None,
+        form_data: dict | None = None,
         params: dict | None = None,
     ) -> dict:
         """
         Raw, low-level HTTP primitive for the cognitive red-team loop.
 
-        Unlike run_fuzzer (which runs a packaged payload sweep), this gives the
-        reasoning model a single, fully model-constructed request. The model
-        picks the method, endpoint, headers, query params and JSON body itself,
-        so it can craft a precise attack vector for a specific business-logic
-        flaw (e.g. a negative-amount transfer).
-
-        The response body is returned (truncated) so the model can READ what came
-        back -- crucially, any stack trace on a 500 -- and pivot its next payload
-        based on the actual server behaviour.
+        Supports both JSON and form-encoded request bodies:
+        - json_body: sent as application/json (API endpoints)
+        - form_data: sent as application/x-www-form-urlencoded (HTML forms like login)
+        If both are provided, json_body takes precedence.
         """
         method = (method or "GET").upper()
         allowed = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
@@ -182,6 +178,7 @@ class MCPClient:
                     endpoint,
                     headers=headers or None,
                     json=json_body if json_body is not None else None,
+                    data=form_data if (form_data is not None and json_body is None) else None,
                     params=params or None,
                 )
             # Persist any Set-Cookie headers so subsequent calls stay authenticated.

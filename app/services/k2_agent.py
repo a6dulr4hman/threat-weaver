@@ -36,7 +36,7 @@ The final JSON object MUST be one of these two shapes:
 
 Available tools and their arguments:
 - run_nmap: {"target": "domain.com", "port_range": "1-1024"}
-- send_http_request: {"method": "GET|POST|PUT|PATCH|DELETE", "endpoint": "http://host/path", "headers": {...}, "json_body": {...}, "params": {...}}
+- send_http_request: {"method": "GET|POST|PUT|PATCH|DELETE", "endpoint": "http://host/path", "headers": {...}, "json_body": {...}, "form_data": {...}, "params": {...}}
 - execute_safe_poc: {"sandbox_id": "<id>", "script": "<python script>", "expected_signature": {...}}
 - query_hackclub: {"component": "<name>", "version": "<version>"}
 - generate_patch: {"vuln_node": "<id>", "source_code": "<code to fix>"}
@@ -100,15 +100,19 @@ GUARDRAILS (important):
 SESSION MANAGEMENT (critical for thorough coverage):
 The HTTP client maintains a persistent cookie jar across all send_http_request
 calls within this job. Use this to:
-1. First log in via the login endpoint (POST form data with username/password).
-   Check the response: a redirect to dashboard or a 200 with dashboard content
-   means you are now authenticated. The session cookie is stored automatically.
+1. FIRST: Log in using FORM DATA (not JSON!). Flask login endpoints expect
+   application/x-www-form-urlencoded. Use the "form_data" parameter:
+   {"tool": "send_http_request", "arguments": {"method": "POST",
+    "endpoint": "http://target/login", "form_data": {"username": "admin'-- ", "password": "x"}}}
+   A response containing "dashboard" or a redirect to /dashboard confirms login.
+   DO NOT send json_body to a login form — that causes a crash, not a login.
 2. After logging in, probe ALL routes marked requires_auth=true in the route map.
    These are inaccessible without authentication - you MUST log in first or you
-   will only ever see the login page redirect (302) and miss 80% of attack surface.
-3. Use known demo credentials if available: admin/S3cur3Adm1n! or sales/letmein.
-   Try the SQL injection auth bypass first: POST username="admin'-- " password=x
-   (a 302 redirect to dashboard confirms the bypass worked).
+   will only ever see the login page redirect and miss the real attack surface.
+3. Try these login approaches in order:
+   a) SQLi auth bypass: form_data={"username": "admin'-- ", "password": "x"}
+   b) Known demo creds: form_data={"username": "admin", "password": "S3cur3Adm1n!"}
+   c) Weak creds: form_data={"username": "sales", "password": "letmein"}
 
 COVERAGE GOAL: Aim to find and patch ALL distinct vulnerable endpoints, not just
 the first one. After patching one finding, continue to the next unprobed route

@@ -373,7 +373,8 @@ async def test_tool_executor_generate_patch():
     from app.services.tool_executor import ToolExecutor
 
     mock_llm = MagicMock()
-    mock_llm.chat = AsyncMock(return_value="fixed_code()")
+    # Return a structured JSON that _parse_finding can handle.
+    mock_llm.chat = AsyncMock(return_value='{"description":"test","risk_level":"High","cves":[],"recommendation":"fix it","code":"def fixed(): pass"}')
 
     executor = ToolExecutor(job_id="test-job", mcp_client=MagicMock(), llm_client=mock_llm)
     result = await executor.execute("generate_patch", {
@@ -382,7 +383,8 @@ async def test_tool_executor_generate_patch():
     })
 
     assert result["vuln_node"] == "sql_injection"
-    assert result["patch"] == "fixed_code()"
+    assert "def fixed(): pass" in result["patch"]
+    assert result["risk_level"] == "High"
 
 
 async def test_tool_executor_handles_exception():
@@ -644,6 +646,7 @@ async def test_tool_executor_send_http_request():
         endpoint="http://t.local/transfer",
         headers={"X-Test": "1"},
         json_body={"amount": -100},
+        form_data=None,
         params={"debug": "1"},
     )
     assert result["status_code"] == 200

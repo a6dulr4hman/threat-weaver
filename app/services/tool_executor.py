@@ -49,20 +49,20 @@ class ToolExecutor:
         return await self.mcp_client.run_fuzzer(url, payloads, injection_type)
 
     async def _exec_send_http(self, args: dict) -> dict:
-        # Raw HTTP primitive: the model fully constructs the request. Accept a
-        # couple of common aliases for the body so minor key drift doesn't fail.
         method = args.get("method", "GET")
         endpoint = args.get("endpoint") or args.get("url", "")
         headers = args.get("headers")
         json_body = args.get("json_body")
         if json_body is None:
             json_body = args.get("body") or args.get("json")
+        form_data = args.get("form_data") or args.get("data")
         params = args.get("params")
         return await self.mcp_client.send_http_request(
             method=method,
             endpoint=endpoint,
             headers=headers,
             json_body=json_body,
+            form_data=form_data,
             params=params,
         )
 

@@ -752,22 +752,21 @@ class OrchestratorFSM:
     def _has_observed_finding(self) -> bool:
         """
         Return True only if the current scan has recorded at least one real,
-        network-observed anomaly on this target.
+        network-observed anomaly on this target via DAST tools.
 
-        Used to gate generate_patch calls: K2 sometimes reads a service banner
-        (e.g. "gunicorn" or "OpenSSH") from nmap output and immediately proposes
-        patches for well-known CVEs without ever triggering those vulnerabilities
-        on the live target. This check refuses those hallucinated remediations.
+        Used to gate generate_patch calls. Only DAST tool results count
+        (send_http_request / run_fuzzer) — NOT execute_safe_poc, because PoC
+        is a verification step for an already-observed anomaly, not a
+        discovery tool. Without this distinction, K2 could run a fabricated
+        PoC script (e.g. ssh_poc_1) that self-confirms via crash markers,
+        then generate patches for invented CVEs.
         """
         for entry in self.attack_graph.get("tool_results", []):
             result = entry.get("result") or {}
             if not isinstance(result, dict):
                 continue
             tool = entry.get("tool", "")
-            # A confirmed PoC is the strongest signal.
-            if tool == "execute_safe_poc" and result.get("exploit_confirmed"):
-                return True
-            # An observed server crash or stack trace from DAST.
+            # Only count DAST-observed anomalies as evidence for patching.
             if tool in ("send_http_request", "run_fuzzer") and (
                 result.get("is_server_error")
                 or result.get("stack_trace_detected")
