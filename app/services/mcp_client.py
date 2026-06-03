@@ -10,11 +10,19 @@ class MCPClient:
     """Model Context Protocol client for sandboxed tool execution."""
 
     def __init__(self):
-        # Persistent cookie jar shared across all send_http_request calls in
-        # this job. This lets K2 log in once and then probe authenticated
-        # endpoints — without it every request is unauthenticated and all
-        # protected routes just redirect to /login.
-        self._cookies: httpx.Cookies = httpx.Cookies()
+        # ONE persistent client for the whole job. Cookies are stored
+        # internally by httpx on the client instance, so Set-Cookie headers
+        # from intermediate redirects (e.g. a 302 after login) are captured
+        # and replayed on every subsequent request automatically.
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """Return the persistent httpx client, creating it on first use."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=30.0, follow_redirects=True
+            )
+        return self._http_client
 
     async def run_nmap(self, target_domain: str, port_range: str) -> dict:
         """
@@ -170,19 +178,15 @@ class MCPClient:
 
         start_time = time.monotonic()
         try:
-            async with httpx.AsyncClient(
-                timeout=30.0, follow_redirects=True, cookies=self._cookies
-            ) as client:
-                resp = await client.request(
-                    method,
-                    endpoint,
-                    headers=headers or None,
-                    json=json_body if json_body is not None else None,
-                    data=form_data if (form_data is not None and json_body is None) else None,
-                    params=params or None,
-                )
-            # Persist any Set-Cookie headers so subsequent calls stay authenticated.
-            self._cookies.update(resp.cookies)
+            client = await self._get_http_client()
+            resp = await client.request(
+                method,
+                endpoint,
+                headers=headers or None,
+                json=json_body if json_body is not None else None,
+                data=form_data if (form_data is not None and json_body is None) else None,
+                params=params or None,
+            )
             elapsed_ms = (time.monotonic() - start_time) * 1000
             body = resp.text or ""
             truncated = len(body) > max_body_chars
@@ -196,7 +200,7 @@ class MCPClient:
             return {
                 "status_code": resp.status_code,
                 "response_headers": dict(resp.headers),
-                "cookies": dict(self._cookies),
+                "cookies": dict(client.cookies),
                 "body": body_snippet,
                 "body_truncated": truncated,
                 "response_length": len(body),
