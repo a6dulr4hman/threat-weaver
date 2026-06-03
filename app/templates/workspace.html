@@ -116,14 +116,18 @@
                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">{{ job.status }}</span>
                     </td>
                     <td class="py-3 px-4">
-                        {% if job.overall_severity == "critical" %}
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">{{ job.overall_severity }}</span>
-                        {% elif job.overall_severity == "high" %}
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-500/10 text-orange-400 border border-orange-500/20">{{ job.overall_severity }}</span>
-                        {% elif job.overall_severity == "medium" %}
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">{{ job.overall_severity }}</span>
-                        {% elif job.overall_severity == "low" %}
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-400/10 text-blue-400 border border-blue-400/20">{{ job.overall_severity }}</span>
+                        {# overall_severity is persisted on the job row, with a fallback to the attack graph. The backend emits "extreme" (not "critical") for the top tier. #}
+                        {% set sev = job.overall_severity or (job.attack_graph_data.overall_severity if job.attack_graph_data else None) %}
+                        {% set sev_key = (sev | lower) if sev else None %}
+                        {% set sev_colors = {
+                            "extreme":  "bg-red-500/10 text-red-400 border-red-500/20",
+                            "critical": "bg-red-500/10 text-red-400 border-red-500/20",
+                            "high":     "bg-orange-500/10 text-orange-400 border-orange-500/20",
+                            "medium":   "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
+                            "low":      "bg-green-500/10 text-green-400 border-green-500/20"
+                        } %}
+                        {% if sev_key and sev_key in sev_colors %}
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border {{ sev_colors[sev_key] }} capitalize">{{ sev }}</span>
                         {% else %}
                         <span class="text-gray-500 text-sm">N/A</span>
                         {% endif %}
