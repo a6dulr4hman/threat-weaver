@@ -280,6 +280,12 @@ class MCPClient:
         """
         import tempfile
 
+        # Repair a common model formatting error: a script submitted as a single
+        # line with literal "\n"/"\t" escape sequences instead of real newlines
+        # (JSON double-escaping). Left as-is it raises "SyntaxError: unexpected
+        # character after line continuation character" and the PoC never runs.
+        script_payload = _normalize_poc_script(script_payload)
+
         # Create a restricted environment: remove sensitive variables
         safe_env = os.environ.copy()
         sensitive_keys = (
@@ -407,6 +413,30 @@ class MCPClient:
                 "mitigations": [],
                 "error": f"Hack Club Search request failed: {e}",
             }
+
+
+def _normalize_poc_script(script: str) -> str:
+    """
+    Repair a PoC script that was submitted as a single line with literal escape
+    sequences (e.g. "import os\\nprint(1)") instead of real newlines.
+
+    The LLM occasionally double-escapes the script when emitting JSON, which
+    makes Python raise "SyntaxError: unexpected character after line
+    continuation character" before any code runs. We only touch scripts that
+    have NO real newlines but DO contain backslash-escaped ones, so genuine
+    multi-line scripts (and intentional "\\n" inside string literals) are left
+    untouched.
+    """
+    if not script:
+        return script
+    if "\n" not in script and "\\n" in script:
+        script = (
+            script.replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\r", "\n")
+        )
+    return script
 
 
 def _evaluate_poc_output(

@@ -448,7 +448,21 @@ class OrchestratorFSM:
                     # Per-endpoint attack budget: count the attempt; if the
                     # endpoint is now exhausted (or close), tell the agent.
                     if endpoint_key:
-                        was_anomaly = self._result_is_anomaly(result)
+                        finding = self._dast_finding(tool_name, arguments, result)
+                        was_anomaly = finding is not None
+                        # A success-based finding (auth bypass, file read, RCE)
+                        # is itself confirmation: the live response already
+                        # proves exploitation. Nudge K2 to record it NOW instead
+                        # of hunting for a server error that will never come.
+                        if finding and finding not in ("server_error", "fuzz_anomaly"):
+                            agent.feed_note(
+                                f"CONFIRMED FINDING ({finding}) on '{endpoint_key}': "
+                                "the live response proves the exploit SUCCEEDED "
+                                "(a 200 OK success, not a server error). That is "
+                                "sufficient evidence — call generate_patch for this "
+                                "flaw now. You do NOT need a separate execute_safe_poc "
+                                "to confirm an already-successful exploit."
+                            )
                         note = self._record_attempt(endpoint_key, was_anomaly)
                         if note:
                             agent.feed_note(note)
@@ -571,11 +585,8 @@ class OrchestratorFSM:
                 )
             elif tool == "execute_safe_poc" and result.get("exploit_confirmed"):
                 confirmed += 1
-            elif tool in ("send_http_request", "run_fuzzer") and (
-                result.get("is_server_error")
-                or result.get("stack_trace_detected")
-                or result.get("server_crash_suspected")
-                or result.get("anomalies_found", 0)
+            elif tool in ("send_http_request", "run_fuzzer") and self._dast_finding(
+                tool, entry.get("arguments") or {}, result
             ):
                 anomalies += 1
 
@@ -753,6 +764,113 @@ class OrchestratorFSM:
             return True
         return False
 
+    # --- Success-based exploitation detection -----------------------------
+    # The error-based signals above (5xx / stack trace / connection drop) only
+    # catch vulnerabilities that CRASH the app. Most real-world exploits SUCCEED
+    # quietly with a 200 OK: an auth bypass returns a valid session, a path
+    # traversal returns file contents, a command injection returns command
+    # output. These detectors read that "exploitation succeeded" evidence
+    # straight from the live response, so such findings get recorded and patched
+    # instead of being missed while waiting for a server error that never comes.
+
+    # Injection metacharacters that mark a submitted value as an injection
+    # ATTEMPT (used to qualify an auth-bypass observation, so a normal login
+    # with valid credentials is never mistaken for a bypass).
+    _INJECTION_MARKERS = ("'", '"', "--", "/*", "#", ";", " or ", " union ", " and ")
+
+    @staticmethod
+    def _looks_like_file_disclosure(body: str) -> bool:
+        """Response leaked the contents of a sensitive file (path traversal / LFI)."""
+        if not body:
+            return False
+        low = body.lower()
+        # /etc/passwd
+        if "root:x:0:0:" in low or "root:!:0:0:" in low:
+            return True
+        if "daemon:x:" in low and "nologin" in low:
+            return True
+        # Private keys
+        if "-----begin" in low and "private key-----" in low:
+            return True
+        return False
+
+    @staticmethod
+    def _looks_like_command_output(body: str) -> bool:
+        """Response contains the output of an injected OS command (RCE)."""
+        if not body:
+            return False
+        # `id` -> uid=0(root) gid=0(root) groups=...
+        if re.search(r"uid=\d+\([\w.-]+\)\s+gid=\d+\(", body):
+            return True
+        # `ping`/`traceroute` output reflected from a host parameter.
+        low = body.lower()
+        if "bytes from" in low and ("icmp_seq=" in low or "ttl=" in low):
+            return True
+        return False
+
+    @classmethod
+    def _looks_like_auth_bypass(cls, arguments: dict, result: dict) -> bool:
+        """
+        A credential submission carrying injection metacharacters that yields an
+        authenticated session — i.e. a SQLi/auth-bypass login succeeded.
+
+        Deliberately narrow to avoid false positives: it requires an auth-style
+        endpoint, injection characters in the submitted values, a non-error
+        status, an authenticated landing page (or a redirect away from login),
+        and the ABSENCE of a failed-login error in the body.
+        """
+        endpoint = (arguments.get("endpoint") or arguments.get("url") or "").lower()
+        if not any(tok in endpoint for tok in ("login", "signin", "sign-in", "auth")):
+            return False
+        creds: dict = {}
+        for src in (
+            arguments.get("form_data"),
+            arguments.get("json_body"),
+            arguments.get("params"),
+        ):
+            if isinstance(src, dict):
+                creds.update(src)
+        blob = " ".join(str(v) for v in creds.values()).lower()
+        if not blob or not any(m in blob for m in cls._INJECTION_MARKERS):
+            return False
+        if result.get("status_code", 0) not in (200, 301, 302, 303, 307, 308):
+            return False
+        body = (result.get("body") or "").lower()
+        # A failed login re-renders the form with an error — never a bypass.
+        if any(f in body for f in ("invalid", "incorrect", "failed", "try again")):
+            return False
+        # Authenticated landing-page markers.
+        if any(s in body for s in ("logout", "sign out", "signout", "dashboard")):
+            return True
+        # A redirect away from the login page also implies a session was granted.
+        loc = (result.get("response_headers") or {}).get("location", "").lower()
+        if loc and "login" not in loc:
+            return True
+        return False
+
+    def _dast_finding(self, tool: str, arguments: dict, result: dict) -> str | None:
+        """
+        Classify a DAST tool result as a concrete finding, or None.
+
+        Covers BOTH error-based exploitation (server crash / stack trace) and
+        success-based exploitation (auth bypass, file disclosure, command
+        execution). This is the single source of truth used by the per-endpoint
+        anomaly budget, the patch-gating guard (_has_observed_finding) and
+        severity scoring, so all three agree on what counts as a real finding.
+        """
+        if tool not in ("send_http_request", "run_fuzzer") or not isinstance(result, dict):
+            return None
+        if self._result_is_anomaly(result) or result.get("server_crash_suspected"):
+            return "fuzz_anomaly" if result.get("anomalies_found", 0) else "server_error"
+        body = result.get("body") or ""
+        if self._looks_like_file_disclosure(body):
+            return "sensitive_file_disclosure"
+        if self._looks_like_command_output(body):
+            return "os_command_execution"
+        if self._looks_like_auth_bypass(arguments or {}, result):
+            return "auth_bypass"
+        return None
+
     def _is_endpoint_exhausted(self, endpoint_key: str) -> bool:
         """True if this endpoint has already hit the attack-attempt budget."""
         exhausted = self.attack_graph.get("exhausted_endpoints", [])
@@ -761,27 +879,26 @@ class OrchestratorFSM:
     def _has_observed_finding(self) -> bool:
         """
         Return True only if the current scan has recorded at least one real,
-        network-observed anomaly on this target via DAST tools.
+        network-observed finding on this target via DAST tools.
 
         Used to gate generate_patch calls. Only DAST tool results count
-        (send_http_request / run_fuzzer) — NOT execute_safe_poc, because PoC
-        is a verification step for an already-observed anomaly, not a
-        discovery tool. Without this distinction, K2 could run a fabricated
-        PoC script (e.g. ssh_poc_1) that self-confirms via crash markers,
-        then generate patches for invented CVEs.
+        (send_http_request / run_fuzzer) — NOT execute_safe_poc, because PoC is
+        a verification step for an already-observed anomaly, not a discovery
+        tool. Without this distinction, K2 could run a fabricated PoC script
+        (e.g. ssh_poc_1) that self-confirms via crash markers, then generate
+        patches for invented CVEs.
+
+        A "finding" is either error-based (5xx / stack trace / dropped
+        connection) OR success-based (auth bypass, sensitive-file disclosure,
+        OS-command output) — see _dast_finding. Recognising the success-based
+        cases is essential: most real exploits return 200 OK, not a crash.
         """
         for entry in self.attack_graph.get("tool_results", []):
             result = entry.get("result") or {}
             if not isinstance(result, dict):
                 continue
             tool = entry.get("tool", "")
-            # Only count DAST-observed anomalies as evidence for patching.
-            if tool in ("send_http_request", "run_fuzzer") and (
-                result.get("is_server_error")
-                or result.get("stack_trace_detected")
-                or result.get("server_crash_suspected")
-                or result.get("anomalies_found", 0)
-            ):
+            if self._dast_finding(tool, entry.get("arguments") or {}, result):
                 return True
         return False
 

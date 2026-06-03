@@ -65,20 +65,38 @@ what you observed. Adapt sequentially - do not request batch payload sweeps.
        (ReadError / RemoteProtocolError). STRONG lead - the backend likely hit
        an unhandled exception on this input. Dig into that exact parameter.
      - reflected input, auth-state changes, or error strings in the body.
-   CLASSIFY BY THE OBSERVED TRIGGER, not by guesswork. A 500 / DB error caused
-   by injecting a single quote (') or other SQL metacharacters into a parameter
-   is SQL injection, NOT XSS — XSS means your markup was reflected verbatim into
-   a 200 response, not that the server errored. Label the finding by the exact
-   input that broke it and the exact behaviour you saw.
+   SUCCESS IS ALSO A FINDING — exploits usually return 200 OK, not an error:
+     - an injected login that returns an authenticated page (a logout link /
+       "dashboard") is an AUTH BYPASS;
+     - a file/path parameter that returns file contents (e.g. "root:x:0:0:") is
+       PATH TRAVERSAL / LFI;
+     - a host/command parameter that returns command output (e.g. "uid=0(root)"
+       or ping replies) is COMMAND INJECTION.
+   Treat these 200-OK successes as confirmed findings even though nothing
+   crashed. CLASSIFY BY THE OBSERVED TRIGGER, not by guesswork. A 500 / DB error
+   caused by injecting a single quote (') or other SQL metacharacters into a
+   parameter is SQL injection, NOT XSS — XSS means your markup was reflected
+   verbatim into a 200 response, not that the server errored. Label the finding
+   by the exact input that broke it and the exact behaviour you saw.
 5. PIVOT: On a 500 or a connection drop, read what leaked, identify the parser
    or validation that broke, adjust your syntax, and fire a refined payload.
 
-Once an anomaly is understood, confirm it with execute_safe_poc, then
-generate_patch. Map run_nmap service banners to CVEs with query_hackclub.
+Once a flaw is understood, record it with generate_patch. A SUCCESS-BASED
+exploit you already reproduced with send_http_request (auth bypass, sensitive
+file/data disclosure, OS command output) is self-confirming — call generate_patch
+for it directly; you do NOT need a separate execute_safe_poc. Reserve
+execute_safe_poc for crash/error-based findings you want to reproduce in
+isolation. Map run_nmap service banners to CVEs with query_hackclub.
 
 USING execute_safe_poc (critical for confirmation):
 The script you provide runs in a sandboxed Python subprocess. To confirm an
 exploit you MUST make the script's verdict machine-readable:
+- WRITE REAL PYTHON. Put each statement on its own line with ACTUAL newlines —
+  never collapse the script onto one line with literal "\\n"/"\\t" escape
+  sequences (that raises SyntaxError before anything runs). Use Python booleans
+  True/False (never bare true/false), and use a requests.Session() so cookies
+  persist across requests (a login's Set-Cookie often rides on a 302 redirect,
+  so check session.cookies / the authenticated page body, not just the header).
 - REPRODUCE THE EXACT TRIGGERING PAYLOAD. The PoC must replay the SAME parameter
   and the SAME characters that produced the anomaly (e.g. the single quote `'`
   that broke the SQL query), against the SAME endpoint, and assert the SAME
@@ -112,8 +130,11 @@ GUARDRAILS (important):
   alone (e.g. "gunicorn on port 80" or "ssh 9.6p1"). A patch is only justified
   after: (a) send_http_request returned is_server_error=true or
   server_crash_suspected=true on that endpoint, OR (b) execute_safe_poc returned
-  exploit_confirmed=true. If you have not observed one of those signals for a
-  specific finding, do NOT generate a patch for it.
+  exploit_confirmed=true, OR (c) you directly observed SUCCESSFUL exploitation in
+  a send_http_request response — an injection-based login that returned an
+  authenticated session, a path that returned sensitive file contents, or input
+  that returned OS command output. If you have not observed one of those signals
+  for a specific finding, do NOT generate a patch for it.
 
 SESSION MANAGEMENT (critical for thorough coverage):
 The HTTP client maintains a persistent cookie jar across all send_http_request
