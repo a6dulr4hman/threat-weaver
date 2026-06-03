@@ -10,18 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AnalysisJob, Workspace
-from app.services.ast_parser import (
-    analyze_codebase,
-    extract_routes,
-    filter_high_risk_files,
-    generate_vuln_hash,
-)
+from app.services.ast_parser import generate_vuln_hash
 from app.services.llm_client import LLMClient
 from app.services.llm_json import extract_json_object, is_api_error
 from app.services.mcp_client import MCPClient
-
-# Where imported GitHub repos are cloned (see routers/workspaces.py import-repo).
-REPO_BASE_DIR = "/tmp/threatweaver"
 
 # Cognitive-fuzzing guardrail: how many non-anomalous payloads the agent may
 # fire at a single endpoint before the orchestrator forces it to move on. This
@@ -177,75 +169,6 @@ class OrchestratorFSM:
         workspace = ws_result.scalar_one_or_none()
         return workspace.target_url if workspace else None
 
-    async def _ingest_code_context(self) -> dict | None:
-        """
-        Phase 1: SAST triage. Run the AST parser over the cloned repo
-        (/tmp/threatweaver/<workspace_id>/repo) and return a compact,
-        token-friendly summary of high-risk files for K2 to reason over.
-
-        Returns None if no repo has been imported for this workspace.
-        """
-        stmt = select(AnalysisJob).where(AnalysisJob.id == self.job_id)
-        result = await self.db.execute(stmt)
-        job = result.scalar_one_or_none()
-        if not job:
-            return None
-
-        repo_dir = os.path.join(REPO_BASE_DIR, job.workspace_id, "repo")
-        if not os.path.isdir(repo_dir):
-            return None
-
-        # AST walking + filtering are CPU/IO bound; run off the event loop.
-        analysis = await asyncio.to_thread(analyze_codebase, repo_dir)
-        high_risk = await asyncio.to_thread(filter_high_risk_files, analysis)
-        counts = await asyncio.to_thread(self._count_repo_files, repo_dir)
-        routes = await asyncio.to_thread(extract_routes, repo_dir)
-
-        summary = []
-        for item in high_risk:
-            try:
-                rel_path = os.path.relpath(item["file_path"], repo_dir)
-            except ValueError:
-                rel_path = item["file_path"]
-            summary.append(
-                {"file": rel_path, "findings": item.get("findings", [])}
-            )
-
-        context = {
-            "repo_dir": repo_dir,
-            "total_files": counts["total"],
-            "python_files": counts["python"],
-            "high_risk_count": len(high_risk),
-            "high_risk_files": summary,
-            # Source-derived route map. The DAST phase attacks THESE endpoints
-            # instead of guessing commodity paths.
-            "routes": routes,
-        }
-
-        # Be honest about coverage: the AST/SAST layer is Python-only today.
-        if counts["python"] == 0:
-            context["note"] = (
-                "No Python source files were found in this repository. Static "
-                "code analysis (SAST) currently supports Python only, so no "
-                "code-level findings are available. Rely on the live DAST tools "
-                "(run_nmap, send_http_request) against the target."
-            )
-        return context
-
-    @staticmethod
-    def _count_repo_files(repo_dir: str) -> dict:
-        """Count total files and Python files in the repo (excluding .git)."""
-        total = 0
-        python = 0
-        for root, dirs, files in os.walk(repo_dir):
-            if ".git" in dirs:
-                dirs.remove(".git")
-            for filename in files:
-                total += 1
-                if filename.endswith(".py"):
-                    python += 1
-        return {"total": total, "python": python}
-
     async def run_cycle(self) -> FSMState:
         """
         K2-driven agentic loop:
@@ -269,14 +192,6 @@ class OrchestratorFSM:
         executor = ToolExecutor(
             job_id=self.job_id, mcp_client=self.mcp_client, llm_client=self.llm_client
         )
-
-        # Phase 1: ingest the cloned repo's source (once per job) so K2 can
-        # reason about high-risk files rather than scanning blind.
-        if "code_analysis" not in self.attack_graph:
-            code_context = await self._ingest_code_context()
-            if code_context is not None:
-                self.attack_graph["code_analysis"] = code_context
-                await self.save_state()
 
         deadline = time.monotonic() + self.cycle_budget_seconds
         try:
