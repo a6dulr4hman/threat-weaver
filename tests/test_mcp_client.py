@@ -260,6 +260,7 @@ async def test_send_http_request_returns_body():
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client.cookies = {}
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
@@ -292,6 +293,7 @@ async def test_send_http_request_detects_stack_trace():
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client.cookies = {}
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
@@ -317,6 +319,7 @@ async def test_send_http_request_truncates_large_body():
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client.cookies = {}
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
