@@ -321,36 +321,34 @@ class OrchestratorFSM:
                         vuln_node = (arguments.get("vuln_node") or "").strip()
 
                         # Reject hallucinated patches: require at least one
-                        # tool_result entry that recorded a real anomaly
-                        # (server crash, stack trace, or confirmed PoC).
-                        # K2 sometimes reads "gunicorn" in nmap output and
-                        # immediately generates CVE patches without ever
-                        # triggering any anomaly on the live target.
+                        # tool_result entry that recorded a real anomaly.
                         if not self._has_observed_finding():
                             agent.feed_note(
                                 "generate_patch BLOCKED: no confirmed finding on "
                                 "this target. A patch is only justified after "
-                                "send_http_request or run_fuzzer returned "
-                                "is_server_error=true / server_crash_suspected=true, "
-                                "or execute_safe_poc returned exploit_confirmed=true. "
-                                "Do not patch based on service names or versions alone."
+                                "send_http_request returned is_server_error=true / "
+                                "server_crash_suspected=true, or execute_safe_poc "
+                                "returned exploit_confirmed=true."
                             )
                             await self.save_state()
                             continue
 
                         if vuln_node and vuln_node in patched:
                             agent.feed_note(
-                                f"'{vuln_node}' is already patched. Do not patch "
-                                "it again - move to a new finding or finish with "
-                                'action "complete".'
+                                f"'{vuln_node}' is already patched. "
+                                'Finish now with {"action": "complete", "summary": "..."}.'
                             )
                             await self.save_state()
                             continue
+
+                        # Hard cap: only 1 patch per run. After one patch K2
+                        # almost always loops trying to patch more things.
+                        # The 300s budget catches the rest, but forcing
+                        # complete after the first patch is cleaner and faster.
                         if len(patched) >= MAX_PATCHES:
                             agent.feed_note(
-                                f"Remediation budget reached ({MAX_PATCHES} "
-                                "patches). Stop generating patches and finish "
-                                'with action "complete".'
+                                f"Remediation budget reached ({MAX_PATCHES} patches). "
+                                'Finish now with {"action": "complete", "summary": "..."}.'
                             )
                             await self.save_state()
                             continue
@@ -377,6 +375,18 @@ class OrchestratorFSM:
                                 "patched_nodes", []
                             ).append(vuln_node)
                             await self._store_mitigation(vuln_node, result)
+                        # After generating a patch, K2 has completed its job.
+                        # Force complete immediately — do NOT loop back to K2
+                        # which would spend another LLM call (up to 120s) and
+                        # likely try to generate another patch anyway.
+                        summary = (
+                            self.attack_graph.get("k2_summary")
+                            or f"Patch generated for {vuln_node}."
+                        )
+                        self.attack_graph["k2_summary"] = summary
+                        self._advance_to_complete()
+                        await self.save_state()
+                        break
 
                     # Track PoC attempts so the guardrail above can cap them.
                     if tool_name == "execute_safe_poc":
