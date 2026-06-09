@@ -384,18 +384,32 @@ class MCPClient:
         )
 
         url = "https://search.hackclub.com/res/v1/web/search"
-        params = {"q": query, "count": 5}
-        headers = {"Authorization": f"Bearer {api_key}"}
+        params = {"q": query}
+        # The Hack Club docs show both Authorization: Bearer and
+        # x-subscription-token. Send both for maximum compatibility.
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "x-subscription-token": api_key,
+        }
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(url, params=params, headers=headers)
                 if resp.status_code != 200:
+                    # Include the response body for debugging API rejections.
+                    detail = ""
+                    try:
+                        detail = resp.text[:200]
+                    except Exception:
+                        pass
                     return {
                         "references": [],
                         "vulnerable_components": [],
                         "mitigations": [],
-                        "error": f"Hack Club Search API returned {resp.status_code}",
+                        "error": (
+                            f"Hack Club Search API returned {resp.status_code}"
+                            f"{': ' + detail if detail else ''}"
+                        ),
                     }
                 data = resp.json() if resp.content else {}
                 web_results = (data.get("web") or {}).get("results") or []
