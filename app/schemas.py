@@ -86,13 +86,3 @@ class MitigationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class RoutingConfigCreate(BaseModel):
-    role: str
-    email_address: str
-
-
-class RoutingConfigResponse(BaseModel):
-    role: str
-    email_address: str
-
-    model_config = {"from_attributes": True}

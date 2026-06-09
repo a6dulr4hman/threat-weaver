@@ -33,10 +33,3 @@ class Mitigation(Base):
     # Structured finding metadata: description, risk_level, cves, recommendation.
     # Stored as JSON so new fields can be added without schema migrations.
     finding_metadata = Column(JSON, nullable=True)
-
-
-class RoutingConfig(Base):
-    __tablename__ = "routing_configs"
-
-    role = Column(String(50), primary_key=True)
-    email_address = Column(String(255), nullable=False)
