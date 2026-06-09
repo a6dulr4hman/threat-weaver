@@ -110,6 +110,52 @@ def build_report_data(attack_graph: dict, severity: str) -> dict:
     remediations: list[dict] = []
     findings_by_key: dict[tuple, dict] = {}
 
+    # Recon services are always derived from nmap regardless of mode.
+    for entry in tool_results:
+        if entry.get("tool") == "run_nmap":
+            result = entry.get("result") or {}
+            if isinstance(result, dict):
+                for svc in result.get("results", []) or []:
+                    recon_ports.append({
+                        "port": str(svc.get("port", "")),
+                        "service": svc.get("service") or "unknown",
+                        "version": svc.get("version") or "",
+                    })
+
+    # Prefer the canonical, de-duplicated vulnerability set so the PDF's
+    # findings/remediations match the UI (detected == tested == remediated).
+    canonical = attack_graph.get("vulnerabilities") or []
+    if canonical:
+        findings = []
+        for v in canonical:
+            det = v.get("detection") or {}
+            ver = v.get("verification") or {}
+            verdict = {
+                "confirmed": "Confirmed in sandbox PoC",
+                "observed": "Confirmed from live exploitation",
+            }.get((ver.get("status") or ""), "Observed")
+            findings.append({
+                "title": f"{v.get('name') or v.get('category') or 'Finding'}",
+                "kind": v.get("category", ""),
+                "endpoint": v.get("endpoint", ""),
+                "method": det.get("method", ""),
+                "payload": "",
+                "detail": _truncate(det.get("evidence") or ver.get("detail") or verdict),
+                "count": 1,
+            })
+            if v.get("remediation"):
+                remediations.append({"vuln_node": v["remediation"].get("vuln_node", v.get("name", "unknown"))})
+        return {
+            "summary": attack_graph.get("k2_summary") or "",
+            "severity": severity,
+            "assessment": attack_graph.get("final_assessment"),
+            "findings": findings,
+            "recon_ports": recon_ports,
+            "remediations": remediations,
+            "patched_nodes": attack_graph.get("patched_nodes", []),
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        }
+
     for entry in tool_results:
         tool = entry.get("tool")
         result = entry.get("result") or {}
@@ -118,12 +164,8 @@ def build_report_data(attack_graph: dict, severity: str) -> dict:
             continue
 
         if tool == "run_nmap":
-            for svc in result.get("results", []) or []:
-                recon_ports.append({
-                    "port": str(svc.get("port", "")),
-                    "service": svc.get("service") or "unknown",
-                    "version": svc.get("version") or "",
-                })
+            # recon_ports were already gathered in the pre-loop above.
+            continue
 
         elif tool in ("send_http_request", "run_fuzzer"):
             is_anomaly = (

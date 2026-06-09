@@ -1,43 +1,47 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="mb-6 flex items-start justify-between flex-wrap gap-4">
-    <div>
-        <h1 class="text-2xl font-bold text-gray-100">Job Detail</h1>
-        <p class="font-mono text-sm text-gray-400 mt-1">ID: {{ job.id }}</p>
-        <p class="text-gray-400 text-sm mt-1">Workspace: <a href="/workspaces/{{ job.workspace_id }}" class="text-cyan-400 hover:text-cyan-300 transition-colors">{{ job.workspace_id }}</a></p>
-    </div>
-    <div class="flex items-center gap-3">
-        {% if job.status in ["pending", "ready"] %}
-        <button id="start-job-btn"
-                class="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-5 py-2 rounded-lg font-medium hover:shadow-lg hover:shadow-cyan-500/25 transition-all text-sm flex items-center">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            Start Scan
-        </button>
-        {% elif job.status != "complete" %}
-        <span id="live-indicator" class="inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-            <span class="relative flex h-2.5 w-2.5 mr-2">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
+<div class="mb-6">
+    <a href="/workspaces/{{ job.workspace_id }}" class="inline-flex items-center gap-1.5 text-xs link-muted mb-4">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Back to workspace
+    </a>
+    <div class="flex items-start justify-between flex-wrap gap-4">
+        <div>
+            <h1 class="page-title">Scan</h1>
+            <p class="font-mono text-xs text-ink-200 mt-1.5">{{ job.id }}</p>
+        </div>
+        <div class="flex items-center gap-3">
+            {% if job.status in ["pending", "ready"] %}
+            <button id="start-job-btn" class="btn btn-primary btn-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Start scan
+            </button>
+            {% elif job.status != "complete" %}
+            <span id="live-indicator" class="badge badge-neutral">
+                <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                </span>
+                Scanning live
             </span>
-            Scanning live
-        </span>
-        {% else %}
-        <span class="inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium bg-green-500/10 text-green-400 border border-green-500/20">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-            Complete
-        </span>
-        {% endif %}
+            {% else %}
+            <span class="badge badge-green">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Complete
+            </span>
+            {% endif %}
+        </div>
     </div>
 </div>
 
 <!-- FSM State Progress Stepper -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-6">Pipeline Progress</h2>
+<section class="card card-pad mb-6">
+    <h2 class="section-title mb-6">Pipeline progress</h2>
     {% set states = ["ready", "recon", "dast_testing", "poc_verification", "blue_team_remediation", "complete"] %}
     {% set state_labels = {"ready": "Ready", "recon": "Recon", "dast_testing": "DAST", "poc_verification": "PoC Verify", "blue_team_remediation": "Remediation", "complete": "Complete"} %}
-    {% set display_phase = job.pipeline_phase if job.pipeline_phase else job.status %}
-    {% set current_index = states.index(display_phase) if display_phase in states else 0 %}
+    {% set display_phase = 'complete' if job.status == 'complete' else (job.pipeline_phase if job.pipeline_phase else job.status) %}
+    {% set current_index = (states | length) if job.status == 'complete' else (states.index(display_phase) if display_phase in states else 0) %}
 
     <div class="flex items-center justify-between w-full overflow-x-auto pb-2">
         {% for state in states %}
@@ -45,24 +49,24 @@
             <div class="flex flex-col items-center min-w-[64px]">
                 {% if loop.index0 < current_index %}
                 <!-- Completed -->
-                <div class="w-9 h-9 rounded-full bg-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/30">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                <div class="w-8 h-8 rounded-full bg-white flex items-center justify-center">
+                    <svg class="w-4 h-4 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
                 </div>
                 {% elif loop.index0 == current_index %}
                 <!-- Current -->
-                <div class="w-9 h-9 rounded-full bg-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/50 pulse-glow">
-                    <div class="w-3 h-3 rounded-full bg-white"></div>
+                <div class="w-8 h-8 rounded-full bg-white flex items-center justify-center pulse-ring">
+                    <div class="w-2.5 h-2.5 rounded-full bg-black"></div>
                 </div>
                 {% else %}
                 <!-- Future -->
-                <div class="w-9 h-9 rounded-full border-2 border-slate-600 flex items-center justify-center">
-                    <div class="w-2 h-2 rounded-full bg-slate-600"></div>
+                <div class="w-8 h-8 rounded-full border border-ink-700 flex items-center justify-center">
+                    <div class="w-1.5 h-1.5 rounded-full bg-ink-600"></div>
                 </div>
                 {% endif %}
-                <span class="text-xs mt-2 text-center {% if loop.index0 == current_index %}text-cyan-400 font-medium{% elif loop.index0 < current_index %}text-gray-300{% else %}text-gray-500{% endif %}">{{ state_labels[state] }}</span>
+                <span class="text-[11px] mt-2 text-center {% if loop.index0 == current_index %}text-white font-medium{% elif loop.index0 < current_index %}text-ink-100{% else %}text-ink-400{% endif %}">{{ state_labels[state] }}</span>
             </div>
             {% if not loop.last %}
-            <div class="flex-1 mx-2 h-0.5 {% if loop.index0 < current_index %}bg-cyan-500{% else %}bg-slate-700{% endif %} rounded hidden sm:block"></div>
+            <div class="flex-1 mx-2 h-px {% if loop.index0 < current_index %}bg-white{% else %}bg-ink-800{% endif %} hidden sm:block"></div>
             {% endif %}
         </div>
         {% endfor %}
@@ -73,32 +77,28 @@
 {% set report = job.attack_graph_data.report if job.attack_graph_data else None %}
 {% set severity = job.overall_severity or (job.attack_graph_data.overall_severity if job.attack_graph_data else None) %}
 {% if severity or report %}
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        Report
-    </h2>
-    <div class="flex flex-wrap items-center gap-6">
+<section class="card card-pad mb-6">
+    <h2 class="section-title mb-4">Report</h2>
+    <div class="flex flex-wrap items-center gap-8">
         {% if severity %}
-        {% set sev_colors = {"extreme": "bg-red-500/10 text-red-400 border-red-500/30", "high": "bg-orange-500/10 text-orange-400 border-orange-500/30", "medium": "bg-yellow-500/10 text-yellow-300 border-yellow-500/30", "low": "bg-green-500/10 text-green-400 border-green-500/30"} %}
+        {% set sev_badge = {"extreme": "badge-red", "critical": "badge-red", "high": "badge-orange", "medium": "badge-yellow", "low": "badge-green"} %}
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Overall Severity</span>
-            <div class="mt-1">
-                <span class="inline-flex items-center px-3 py-1 rounded-lg text-sm font-semibold border {{ sev_colors.get(severity, 'bg-slate-700 text-gray-300 border-slate-600') }}">{{ severity | upper }}</span>
+            <span class="eyebrow">Overall severity</span>
+            <div class="mt-1.5">
+                <span class="badge {{ sev_badge.get(severity, 'badge-neutral') }}">{{ severity | upper }}</span>
             </div>
         </div>
         {% endif %}
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Vulnerability Report</span>
-            <div class="mt-1">
+            <span class="eyebrow">Vulnerability report</span>
+            <div class="mt-1.5">
                 {% if report and report.status == "failed" %}
-                <span class="inline-flex items-center px-3 py-1 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30">Generation failed</span>
-                <p class="text-xs text-gray-400 mt-1.5">{{ report.reason }}</p>
+                <span class="badge badge-red">Generation failed</span>
+                <p class="text-xs text-ink-300 mt-1.5">{{ report.reason }}</p>
                 {% else %}
-                <a href="/api/jobs/{{ job.id }}/report"
-                   class="inline-flex items-center bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:shadow-lg hover:shadow-cyan-500/25 transition-all text-sm">
-                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    Download PDF Report
+                <a href="/api/jobs/{{ job.id }}/report" class="btn btn-primary btn-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                    Download PDF report
                 </a>
                 {% endif %}
             </div>
@@ -107,223 +107,417 @@
 </section>
 {% endif %}
 
+<!-- K2-Think-v2 Token Usage Counter -->
+{% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data else None %}
+{% if job.attack_graph_data %}
+<section class="card card-pad mb-6">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 class="section-title flex items-center gap-2">
+            <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
+            K2-Think-v2 token usage
+        </h2>
+        <span class="text-xs text-ink-400">{{ "MBZUAI-IFM/K2-Think-v2" }}</span>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden">
+        <div class="bg-ink-950 px-5 py-4">
+            <div class="eyebrow">Total tokens</div>
+            <div class="mt-1 text-2xl font-semibold text-white tracking-tight" id="tkTotal">{{ "{:,}".format(token_usage.total_tokens or 0) if token_usage else 0 }}</div>
+        </div>
+        <div class="bg-ink-950 px-5 py-4">
+            <div class="eyebrow">Prompt</div>
+            <div class="mt-1 text-2xl font-semibold text-ink-100 tracking-tight" id="tkPrompt">{{ "{:,}".format(token_usage.prompt_tokens or 0) if token_usage else 0 }}</div>
+        </div>
+        <div class="bg-ink-950 px-5 py-4">
+            <div class="eyebrow">Completion</div>
+            <div class="mt-1 text-2xl font-semibold text-ink-100 tracking-tight" id="tkComp">{{ "{:,}".format(token_usage.completion_tokens or 0) if token_usage else 0 }}</div>
+        </div>
+        <div class="bg-ink-950 px-5 py-4">
+            <div class="eyebrow">API calls</div>
+            <div class="mt-1 text-2xl font-semibold text-ink-100 tracking-tight" id="tkCalls">{{ token_usage.llm_calls or 0 if token_usage else 0 }}</div>
+        </div>
+    </div>
+    <p class="text-xs text-ink-400 mt-3">Counts every K2-Think-v2 call this scan made: agent reasoning, patch synthesis, and the final assessment.</p>
+</section>
+{% endif %}
+
 <!-- K2-Think-v2 Security Assessment -->
 {% set assessment = job.attack_graph_data.final_assessment if job.attack_graph_data else None %}
+{% set vuln_counts = job.attack_graph_data.vulnerability_counts if job.attack_graph_data else None %}
 {% if assessment %}
 {% set risk = (assessment.overall_risk or 'Informational') | lower %}
-{% set risk_colors = {
-    'critical': 'bg-red-500/10 text-red-400 border-red-500/30',
-    'high':     'bg-orange-500/10 text-orange-400 border-orange-500/30',
-    'medium':   'bg-yellow-500/10 text-yellow-300 border-yellow-500/30',
-    'low':      'bg-green-500/10 text-green-400 border-green-500/30',
-    'informational': 'bg-slate-600/20 text-gray-300 border-slate-600'
+{% set risk_badge = {
+    'critical': 'badge-red',
+    'high':     'badge-orange',
+    'medium':   'badge-yellow',
+    'low':      'badge-green',
+    'informational': 'badge-neutral'
 } %}
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-        K2-Think-v2 Security Assessment
+<section class="card card-pad mb-6">
+    <h2 class="section-title mb-4 flex items-center gap-2">
+        <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+        K2-Think-v2 security assessment
     </h2>
-    <div class="flex flex-wrap items-center gap-6 mb-4">
+
+    {% if vuln_counts %}
+    <div class="grid grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden mb-5">
+        <div class="bg-ink-950 px-4 py-3 text-center">
+            <div class="text-2xl font-semibold text-white tracking-tight">{{ vuln_counts.detected }}</div>
+            <div class="eyebrow mt-0.5">Detected</div>
+        </div>
+        <div class="bg-ink-950 px-4 py-3 text-center">
+            <div class="text-2xl font-semibold text-white tracking-tight">{{ vuln_counts.tested }}</div>
+            <div class="eyebrow mt-0.5">Tested</div>
+        </div>
+        <div class="bg-ink-950 px-4 py-3 text-center">
+            <div class="text-2xl font-semibold text-white tracking-tight">{{ vuln_counts.remediated }}</div>
+            <div class="eyebrow mt-0.5">Remediated</div>
+        </div>
+        <div class="bg-ink-950 px-4 py-3 text-center">
+            <div class="text-2xl font-semibold tracking-tight" style="color:#4ade80">{{ vuln_counts.total }}</div>
+            <div class="eyebrow mt-0.5">Total</div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="flex flex-wrap items-center gap-8 mb-5">
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Vulnerabilities Identified</span>
-            <div class="mt-1 text-2xl font-bold text-gray-100">{{ assessment.total_vulnerabilities if assessment.total_vulnerabilities is not none else 'n/a' }}</div>
+            <span class="eyebrow">Vulnerabilities</span>
+            <div class="mt-1 text-2xl font-semibold text-white tracking-tight">{{ assessment.total_vulnerabilities if assessment.total_vulnerabilities is not none else 'n/a' }}</div>
         </div>
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Overall Risk</span>
-            <div class="mt-1">
-                <span class="inline-flex items-center px-3 py-1 rounded-lg text-sm font-semibold border {{ risk_colors.get(risk, 'bg-slate-700 text-gray-300 border-slate-600') }}">{{ (assessment.overall_risk or 'Informational') | upper }}</span>
+            <span class="eyebrow">Overall risk</span>
+            <div class="mt-1.5">
+                <span class="badge {{ risk_badge.get(risk, 'badge-neutral') }}">{{ (assessment.overall_risk or 'Informational') | upper }}</span>
             </div>
         </div>
     </div>
     {% if assessment.executive_summary %}
-    <p class="text-sm text-gray-300 leading-relaxed mb-4">{{ assessment.executive_summary }}</p>
+    <p class="text-sm text-ink-100 leading-relaxed mb-5">{{ assessment.executive_summary }}</p>
     {% endif %}
     {% if assessment.vulnerabilities %}
-    <div class="overflow-x-auto">
-        <table class="w-full text-left">
+    <div class="overflow-x-auto surface-inset">
+        <table class="tw-table">
             <thead>
-                <tr class="border-b border-slate-700 text-gray-400 text-xs uppercase tracking-wider">
-                    <th class="py-2 px-3">Vulnerability</th>
-                    <th class="py-2 px-3">Endpoint</th>
-                    <th class="py-2 px-3">Severity</th>
-                    <th class="py-2 px-3">CVSS</th>
-                    <th class="py-2 px-3">Confidence</th>
+                <tr>
+                    <th>Vulnerability</th>
+                    <th>Endpoint</th>
+                    <th>Severity</th>
+                    <th>CVSS</th>
+                    <th>Confidence</th>
                 </tr>
             </thead>
             <tbody>
                 {% for v in assessment.vulnerabilities %}
                 {% set vsev = (v.severity or 'low') | lower %}
-                <tr class="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors align-top">
-                    <td class="py-3 px-3">
-                        <div class="text-sm font-medium text-gray-100">{{ v.name or v.category or 'Finding' }}</div>
-                        {% if v.category and v.name %}<div class="text-xs text-gray-500 mt-0.5">{{ v.category }}</div>{% endif %}
-                        {% if v.impact %}<div class="text-xs text-gray-400 mt-1">{{ v.impact }}</div>{% endif %}
+                <tr class="align-top">
+                    <td>
+                        <div class="text-sm font-medium text-white">{{ v.name or v.category or 'Finding' }}</div>
+                        {% if v.category and v.name %}<div class="text-xs text-ink-300 mt-0.5">{{ v.category }}</div>{% endif %}
+                        {% if v.impact %}<div class="text-xs text-ink-200 mt-1">{{ v.impact }}</div>{% endif %}
                     </td>
-                    <td class="py-3 px-3 text-sm text-gray-300 font-mono">{{ v.endpoint or '-' }}</td>
-                    <td class="py-3 px-3">
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border {{ risk_colors.get(vsev, 'bg-slate-700 text-gray-300 border-slate-600') }}">{{ (v.severity or 'n/a') | upper }}</span>
-                    </td>
-                    <td class="py-3 px-3 text-sm text-gray-300">{{ v.cvss if v.cvss is not none else '-' }}</td>
-                    <td class="py-3 px-3 text-sm text-gray-300">{{ v.confidence or '-' }}</td>
+                    <td class="text-sm text-ink-100 font-mono">{{ v.endpoint or '-' }}</td>
+                    <td><span class="badge {{ risk_badge.get(vsev, 'badge-neutral') }}">{{ (v.severity or 'n/a') | upper }}</span></td>
+                    <td class="text-sm text-ink-100">{{ v.cvss if v.cvss is not none else '-' }}</td>
+                    <td class="text-sm text-ink-100">{{ v.confidence or '-' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% endif %}
-    <p class="text-xs text-gray-500 mt-4 italic">Assessment generated by K2-Think-v2 from the evidence gathered during this scan.</p>
+    <p class="text-xs text-ink-400 mt-4">K2-Think-v2 selected one definitive verdict per vulnerability from the evidence gathered during this scan.</p>
 </section>
 {% endif %}
 
 <!-- Attack Graph (Canvas Node Graph) -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        Attack Graph
-        <span id="graphLiveTag" class="ml-3 {% if job.status == 'complete' %}hidden{% endif %} inline-flex items-center gap-1.5 text-xs text-cyan-400 font-normal">
-            <span class="relative flex h-2 w-2"><span class="animate-ping absolute h-full w-full rounded-full bg-cyan-400 opacity-75"></span><span class="relative rounded-full h-2 w-2 bg-cyan-500"></span></span>Live
-        </span>
-    </h2>
+<section class="card card-pad mb-6">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 class="section-title flex items-center gap-2">
+            <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Attack graph
+        </h2>
+        <div class="flex items-center gap-3">
+            <span class="text-xs text-ink-400 hidden sm:inline" id="graphSteps">{{ (job.attack_graph_data.tool_results | length) if (job.attack_graph_data and job.attack_graph_data.tool_results) else 0 }} steps</span>
+            <span id="graphLiveTag" class="{% if job.status == 'complete' %}hidden{% endif %} badge badge-neutral">
+                <span class="relative flex h-2 w-2"><span class="animate-ping absolute h-full w-full rounded-full bg-white opacity-60"></span><span class="relative rounded-full h-2 w-2 bg-white"></span></span>Live
+            </span>
+        </div>
+    </div>
 
     {% set tool_results = job.attack_graph_data.tool_results if job.attack_graph_data and job.attack_graph_data.tool_results else [] %}
-    {% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data and job.attack_graph_data.token_usage else None %}
 
-    {% if token_usage %}
-    <div class="flex flex-wrap items-center gap-5 mb-4 pb-4 border-b border-slate-700/60">
-        <div class="flex items-center gap-2"><svg class="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg><span class="text-xs text-gray-400 uppercase tracking-wider">Tokens</span><span class="text-sm font-bold text-gray-100" id="statTotal">{{ "{:,}".format(token_usage.total_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Prompt:</span><span class="text-sm text-gray-300" id="statPrompt">{{ "{:,}".format(token_usage.prompt_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Completion:</span><span class="text-sm text-gray-300" id="statComp">{{ "{:,}".format(token_usage.completion_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">LLM Calls:</span><span class="text-sm text-gray-300" id="statCalls">{{ token_usage.llm_calls or 0 }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Steps:</span><span class="text-sm text-gray-300" id="statIter">{{ tool_results | length }}</span></div>
-    </div>
-    {% endif %}
-
-    <div class="relative rounded-lg border border-slate-700 bg-slate-900/80 overflow-hidden" style="height:600px;" id="graphWrap">
+    <div class="relative rounded-xl border border-white/10 bg-black overflow-hidden" style="height:600px;" id="graphWrap">
         <canvas id="attackGraphCanvas" style="width:100%;height:100%;cursor:grab;"></canvas>
-        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-sm px-4 py-3 rounded-lg bg-slate-700/95 border border-slate-500 shadow-2xl text-xs text-gray-200 leading-relaxed backdrop-blur-sm"></div>
         <div class="absolute bottom-3 right-3 flex gap-1.5 z-20">
-            <button onclick="graphZoom(1.3)" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-base font-bold">+</button>
-            <button onclick="graphZoom(0.7)" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-base font-bold">&minus;</button>
-            <button onclick="graphReset()" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-xs font-bold">&#x21BA;</button>
+            <button onclick="graphZoom(1.25)" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-base font-medium transition-colors">+</button>
+            <button onclick="graphZoom(0.8)" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-base font-medium transition-colors">&minus;</button>
+            <button onclick="graphReset()" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-xs transition-colors" title="Fit to content">&#x21BA;</button>
         </div>
-        <div class="absolute top-3 left-3 flex gap-4 text-[10px] text-gray-400 z-20">
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-cyan-500/80"></span>Recon</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-blue-500/80"></span>Scanning</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-red-500/80"></span>Finding</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-amber-500/80"></span>PoC</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-green-500/80"></span>Patch</span>
+        <div class="absolute top-3 left-3 flex flex-wrap gap-x-3 gap-y-1.5 text-[10px] text-ink-200 z-20 pr-16">
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#22d3ee"></span>Recon</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#3b82f6"></span>Scanning</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#f87171"></span>Finding</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#fbbf24"></span>PoC</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#4ade80"></span>Patch</span>
         </div>
+        <p class="absolute bottom-3 left-3 z-20 text-[10px] text-ink-500">Drag to pan &middot; scroll to zoom</p>
     </div>
 
     <script>
     (function(){
     const JOB_ID='{{ job.id }}',JOB_STATUS='{{ job.status }}';
     let raw={{ tool_results | tojson }};
+    let VULNS={{ ((job.attack_graph_data.vulnerabilities or []) if job.attack_graph_data else []) | tojson }} || [];
     const canvas=document.getElementById('attackGraphCanvas');
     const ctx=canvas.getContext('2d');
-    const tooltip=document.getElementById('graphTooltip');
-    let scale=1,offsetX=30,offsetY=0,dragging=false,lastMouse={x:0,y:0};
     const dpr=window.devicePixelRatio||1;
-    const C={recon:{bg:'#0c4a6e',border:'#22d3ee',title:'#67e8f9',text:'#a5f3fc',dim:'#64748b'},scan:{bg:'#172554',border:'#3b82f6',title:'#93c5fd',text:'#bfdbfe',dim:'#64748b'},finding:{bg:'#450a0a',border:'#f87171',title:'#fca5a5',text:'#fecaca',dim:'#a8a29e'},verify:{bg:'#451a03',border:'#fbbf24',title:'#fde68a',text:'#fef3c7',dim:'#a8a29e'},patch:{bg:'#052e16',border:'#4ade80',title:'#bbf7d0',text:'#dcfce7',dim:'#64748b'}};
+    let scale=1,offsetX=40,offsetY=40,dragging=false,lastMouse={x:0,y:0},hoverNode=null;
+    const NODE_BG='#0a0a0a',NODE_BG2='#111214';
+    const TITLE='#fafafa',BODY='#cfcfcf',DIM='#8a8a8a';
+    const ACCENT={recon:'#22d3ee',scan:'#3b82f6',finding:'#f87171',verify:'#fbbf24',patch:'#4ade80'};
+    function hexA(h,a){const n=parseInt(h.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
 
-    function buildSteps(entries){
-        const steps=[];let reconSvc=[],reconCVE=[],probes={},findings=[],pocs=[],patches=[];
-        for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{};
-            if(t==='run_nmap'){for(const s of(r.results||[]))reconSvc.push(s);}
-            else if(t==='query_hackclub'){reconCVE.push({comp:a.component||'',ver:a.version||'',refs:r.references||[],err:r.error});}
-            else if(t==='send_http_request'){const ep=(a.endpoint||'').replace(/^https?:\/\/[^/]+/,'').split('?')[0].replace(/%27.*$|'.*$/,'')||'/';const isErr=r.is_server_error||r.server_crash_suspected||r.stack_trace_detected;const body=(r.body||'').toLowerCase();const isLoginBypass=(ep.includes('login')&&r.status_code===200&&(body.includes('dashboard')||body.includes('sign out')||body.includes('logout')));const isFileDisclosure=(r.status_code===200&&(body.includes('root:x:0:0:')||body.includes('uid=0(root)')));const isExploit=isLoginBypass||isFileDisclosure;if(isErr||isExploit){const label=isLoginBypass?'Auth Bypass':isFileDisclosure?'File/RCE Disclosure':'Server Error/Crash';const key=ep+'|'+label;if(!findings.find(f=>f.key===key))findings.push({key,endpoint:ep,method:a.method||'GET',status:r.status_code,type:isExploit?'exploit':'error',label,reasoning:e.reasoning||''});}else{if(!probes[ep])probes[ep]=[];probes[ep].push({m:a.method||'GET',s:r.status_code});}}
-            else if(t==='execute_safe_poc'){pocs.push({id:a.sandbox_id||'poc',confirmed:!!r.exploit_confirmed,detail:(r.match_detail||'').slice(0,80),reasoning:e.reasoning||''});}
-            else if(t==='generate_patch'){patches.push({vuln:a.vuln_node||'unknown',ok:!r.error,reasoning:e.reasoning||''});}
+    // ============================================================ //
+    //  Client-side correlation (mirrors app/services/correlation.py)
+    //  so the graph ALWAYS shows detection -> PoC -> patch lanes,
+    //  even for jobs whose stored data predates the server-side
+    //  correlation, and live while a scan is still running.
+    // ============================================================ //
+    const LABEL={
+        auth_bypass:{cat:'Broken Authentication',title:'SQL injection authentication bypass',sev:'High'},
+        sensitive_file_disclosure:{cat:'Path Traversal',title:'Path traversal / file disclosure',sev:'High'},
+        os_command_execution:{cat:'OS Command Injection',title:'OS command injection',sev:'Critical'},
+        server_error:{cat:'Injection',title:'Server-side error / crash',sev:'High'},
+        fuzz_anomaly:{cat:'Injection',title:'Anomalous response to crafted input',sev:'Medium'},
+        vulnerable_service:{cat:'Vulnerable Service',title:'Known-vulnerable network service',sev:'Critical'}
+    };
+    const RANK={critical:4,high:3,medium:2,low:1,informational:0};
+    const CAT_KW={
+        'Broken Authentication':['login','auth','sqli','sql','signin','bypass','credential'],
+        'SQL Injection':['sql','sqli','injection'],
+        'Path Traversal':['traversal','lfi','path','download','file','directory'],
+        'OS Command Injection':['command','cmd','rce','exec','shell','diagnostics','ping','backup'],
+        'Vulnerable Service':['ftp','vsftpd','backdoor','ssh','smb','service','telnet'],
+        'Injection':['injection','inject']
+    };
+    const HINTS=['ftp','vsftpd','backdoor','6200','smb','telnet'];
+    const INJ=["'",'"','--','/*','#',';',' or ',' union ',' and '];
+    function svcLike(x){x=(x||'').toLowerCase();return HINTS.some(h=>x.includes(h));}
+    function normPath(raw){if(!raw)return'/';let s=(raw+'').split('?')[0].split('#')[0];if(s.includes('://')){s=s.split('://')[1];const i=s.indexOf('/');s=i!==-1?s.slice(i):'/';}if(!s.startsWith('/'))s='/'+s;return s.replace(/\/+$/,'')||'/';}
+    function toks(p){return (p||'').toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>=3);}
+    function anomaly(r){return !!(r.is_server_error||r.stack_trace_detected||r.anomalies_found||r.server_crash_suspected);}
+    function fileDisc(b){b=(b||'').toLowerCase();return b.includes('root:x:0:0:')||b.includes('root:!:0:0:')||(b.includes('daemon:x:')&&b.includes('nologin'))||(b.includes('-----begin')&&b.includes('private key-----'));}
+    function cmdOut(b){if(!b)return false;if(/uid=\d+\([\w.-]+\)\s+gid=\d+\(/.test(b))return true;const l=b.toLowerCase();return l.includes('bytes from')&&(l.includes('icmp_seq=')||l.includes('ttl='));}
+    function authBypass(a,r){const ep=((a.endpoint||a.url||'')+'').toLowerCase();if(!['login','signin','sign-in','auth'].some(t=>ep.includes(t)))return false;let creds={};for(const s of[a.form_data,a.json_body,a.params]){if(s&&typeof s==='object')Object.assign(creds,s);}const blob=Object.values(creds).join(' ').toLowerCase();if(!blob||!INJ.some(m=>blob.includes(m)))return false;if(![200,301,302,303,307,308].includes(r.status_code))return false;const b=(r.body||'').toLowerCase();if(['invalid','incorrect','failed','try again'].some(f=>b.includes(f)))return false;if(['logout','sign out','signout','dashboard'].some(s=>b.includes(s)))return true;const loc=((r.response_headers||{}).location||'').toLowerCase();return !!(loc&&!loc.includes('login'));}
+    function classify(tool,a,r){if(!['send_http_request','run_fuzzer'].includes(tool)||!r)return null;if(anomaly(r))return r.anomalies_found?'fuzz_anomaly':'server_error';const b=r.body||'';if(fileDisc(b))return'sensitive_file_disclosure';if(cmdOut(b))return'os_command_execution';if(authBypass(a||{},r))return'auth_bypass';return null;}
+    function cleanEvidence(r){const t=r.telemetry||'';if(t)return t;const b=r.body||'';return /<!doctype|<html/i.test(b)?'':b;}
+    function cap(s){s=(s||'');return s.charAt(0).toUpperCase()+s.slice(1).toLowerCase();}
+    function humanize(v){const h=(v||'vulnerability').replace(/[_-]+/g,' ').trim();return h.charAt(0).toUpperCase()+h.slice(1);}
+    function inferCat(v){const n=(v||'').toLowerCase();
+        if(/command|cmd|rce|exec|shell/.test(n))return'OS Command Injection';
+        if(/traversal|lfi|directory|download|path/.test(n))return'Path Traversal';
+        if(/vsftpd|backdoor|ftp|telnet|smb/.test(n))return'Vulnerable Service';
+        if(/sql|sqli/.test(n)&&/login|auth|bypass/.test(n))return'Broken Authentication';
+        if(/sql|sqli|injection/.test(n))return'SQL Injection';
+        if(/auth|bypass/.test(n))return'Broken Authentication';
+        if(/xss|script/.test(n))return'Cross-Site Scripting';
+        if(/ssrf/.test(n))return'Server-Side Request Forgery';
+        if(/idor|access|privilege/.test(n))return'Broken Access Control';
+        return'Vulnerability';}
+    function inferEp(v){const n=(v||'').toLowerCase();for(const[k,p]of[['diagnostics','/admin/diagnostics'],['backup','/admin/backup'],['login','/login'],['customer','/customers'],['download','/download'],['report','/reports/compute'],['admin','/admin']]){if(n.includes(k))return p;}if(/vsftpd|backdoor|ftp/.test(n))return'FTP :21';return'';}
+    const CAT_LABEL={'OS Command Injection':'os_command_execution','Path Traversal':'sensitive_file_disclosure','Vulnerable Service':'vulnerable_service','Broken Authentication':'auth_bypass','SQL Injection':'server_error'};
+
+    function correlateClient(entries){
+        const dets=[],byKey={},pocs=[],patches=[],svcs=[];
+        function ensureDet(cat,ep,lab,det,name,sev){const key=cat+'|'+ep;if(byKey[key])return byKey[key];const m=LABEL[lab]||{cat,title:'Security finding',sev:'Medium'};const o={name:name||m.title,category:cat,endpoint:ep,severity:sev||m.sev,detection:det,verification:null,remediation:null};dets.push(o);byKey[key]=o;return o;}
+        for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{},reason=e.reasoning||'';if(!r||typeof r!=='object')continue;
+            if(t==='run_nmap'){for(const s of(r.results||[]))svcs.push(s);continue;}
+            if(t==='send_http_request'||t==='run_fuzzer'){const lab=classify(t,a,r);if(!lab)continue;const ep=normPath(a.endpoint||a.url||'/');ensureDet(LABEL[lab].cat,ep,lab,{method:a.method||(t==='run_fuzzer'?'FUZZ':'GET'),status:r.status_code,evidence:cleanEvidence(r).slice(0,280),reasoning:reason});continue;}
+            if(t==='execute_safe_poc'){pocs.push({sandbox_id:(a.sandbox_id||'').trim(),confirmed:!!r.exploit_confirmed,detail:(r.match_detail||r.trace||'').slice(0,200),reasoning:reason});continue;}
+            if(t==='generate_patch'&&!r.error){patches.push({vuln_node:(a.vuln_node||'').trim(),risk_level:r.risk_level||'High',cves:r.cves||[],recommendation:r.recommendation||'',description:r.description||'',code:r.patch||'',reasoning:reason});continue;}
         }
-        // Detect FTP/non-HTTP findings from confirmed PoCs or patches
-        for(const p of pocs){if(p.confirmed){const rl=p.reasoning.toLowerCase();if(rl.includes('ftp')||rl.includes('vsftpd')||rl.includes('6200')||rl.includes('backdoor')){if(!findings.find(f=>f.endpoint.includes('FTP')))findings.push({key:'ftp|exploit',endpoint:'FTP :21',method:'TCP',status:0,type:'exploit',reasoning:p.reasoning});}}}
-        for(const pt of patches){const vl=pt.vuln.toLowerCase();if((vl.includes('ftp')||vl.includes('vsftpd')||vl.includes('backdoor'))&&!findings.find(f=>f.endpoint.includes('FTP')))findings.push({key:'ftp|exploit',endpoint:'FTP :21',method:'TCP',status:0,type:'exploit',reasoning:'vsftpd 2.3.4 backdoor'});}
-        // Also detect from nmap + CVE lookup combo
-        if(reconSvc.find(s=>s.service==='ftp'&&s.version&&s.version.includes('2.3'))&&!findings.find(f=>f.endpoint.includes('FTP'))){findings.push({key:'ftp|exploit',endpoint:'FTP :21 (vsftpd 2.3.4)',method:'TCP',status:0,type:'exploit',reasoning:'Known backdoor CVE-2011-2523'});}
-
-        // Build step list
-        if(reconSvc.length||reconCVE.length){const lines=reconSvc.map(s=>'Port '+s.port+': '+s.service+(s.version?' '+s.version:''));const cl=reconCVE.map(c=>c.comp+' '+c.ver+(c.err?' (failed)':' \u2192 '+(c.refs.length)+' refs'));steps.push({type:'recon',title:'Reconnaissance',lines:[...lines,...cl]});}
-        const eps=Object.keys(probes);if(eps.length){const total=Object.values(probes).reduce((s,g)=>s+g.length,0);steps.push({type:'scan',title:'Endpoint Scanning',lines:[total+' requests \u2192 '+eps.length+' endpoints',...eps.slice(0,6).map(e=>'  '+e+' ('+probes[e].length+'x)'),...(eps.length>6?['  +'+(eps.length-6)+' more']:[]) ]});}
-        for(const f of findings)steps.push({type:'finding',title:(f.label||'Finding')+': '+f.endpoint,lines:[f.endpoint,f.method+(f.status?' \u2192 HTTP '+f.status:''),f.reasoning.slice(0,70)]});
-        for(const p of pocs)steps.push({type:'verify',title:p.confirmed?'\u2713 Confirmed: '+p.id:'\u2717 Failed: '+p.id,lines:[p.confirmed?'Exploit verified successfully':'Verification failed or inconclusive',p.detail||p.reasoning.slice(0,60)]});
-        for(const p of patches)steps.push({type:'patch',title:'Patch: '+p.vuln.replace(/_/g,' '),lines:[p.ok?'Remediation generated':'Generation failed',p.reasoning.slice(0,70)]});
-        return steps;
+        // Network-service detection (vsftpd backdoor etc.) from nmap/PoC/patch.
+        if(!dets.some(d=>d.category==='Vulnerable Service')){
+            let lbl=null;for(const s of svcs){const v=(s.version||'')+'';if(s.service==='ftp'&&v.includes('2.3')){lbl='ftp '+v;break;}}
+            const pS=pocs.find(p=>p.confirmed&&svcLike(p.reasoning+' '+p.sandbox_id));
+            const ptS=patches.find(p=>svcLike(p.vuln_node+' '+p.reasoning));
+            if(lbl||pS||ptS){const ep=(lbl&&lbl.includes('ftp'))?'FTP :21':'Network service';ensureDet('Vulnerable Service',ep,'vulnerable_service',{method:'TCP',status:null,evidence:lbl||(pS&&pS.detail)||'',reasoning:(pS||ptS||{}).reasoning||''});}
+        }
+        function bestMatch(text,wantSvc,minScore){minScore=minScore||1;text=(text||'').toLowerCase();let best=null,bs=0;for(const d of dets){const isS=d.category==='Vulnerable Service';let sc=0;if(wantSvc&&isS)sc+=3;for(const tk of toks(normPath(d.endpoint))){if(tk&&text.includes(tk))sc+=3;}for(const kw of(CAT_KW[d.category]||[])){if(text.includes(kw))sc+=1;}if(sc>bs){best=d;bs=sc;}}return bs>=minScore?best:null;}
+        function applySev(d,p){if((RANK[(p.risk_level||'').toLowerCase()]||0)>(RANK[(d.severity||'').toLowerCase()]||0))d.severity=cap(p.risk_level);}
+        // A patch proves a vuln was identified -> verified -> fixed: attach it
+        // to a detection (endpoint/service-level match only), or PROMOTE it into
+        // its own lane so no remediation is ever dropped ('5 patched, N shown').
+        for(const p of patches){const text=p.vuln_node+' '+p.reasoning;const want=svcLike(text);
+            const payload={vuln_node:p.vuln_node,risk_level:p.risk_level,cves:p.cves,recommendation:p.recommendation,description:p.description,code:p.code};
+            let d=bestMatch(text,want,3);
+            if(d&&!d.remediation){d.remediation=payload;applySev(d,p);continue;}
+            const cat=inferCat(p.vuln_node),ep=inferEp(p.vuln_node)||humanize(p.vuln_node),lab=CAT_LABEL[cat];
+            d=ensureDet(cat,ep,lab,{method:'',status:null,evidence:p.description,reasoning:p.reasoning},humanize(p.vuln_node),cap(p.risk_level));
+            if(d.remediation){d=ensureDet(cat,ep+' ('+p.vuln_node+')',lab,{method:'',status:null,evidence:p.description,reasoning:p.reasoning},humanize(p.vuln_node),cap(p.risk_level));}
+            d.remediation=payload;applySev(d,p);
+        }
+        // One definitive verification per vuln (confirmed beats failed).
+        const used=new Set();
+        pocs.map((p,i)=>[i,p]).sort((x,y)=>(x[1].confirmed?0:1)-(y[1].confirmed?0:1)).forEach(([i,p])=>{const want=svcLike(p.reasoning+' '+p.sandbox_id);const d=bestMatch(p.reasoning+' '+p.sandbox_id,want);if(!d)return;if(d.verification&&d.verification.status==='confirmed'&&!p.confirmed)return;d.verification={status:p.confirmed?'confirmed':'failed',method:'sandbox_poc',sandbox_id:p.sandbox_id,detail:p.detail};used.add(i);});
+        const leftPoc=pocs.filter((p,i)=>!used.has(i)&&p.confirmed);
+        for(const d of dets){if(!d.verification&&leftPoc.length){const p=leftPoc.shift();d.verification={status:'confirmed',method:'sandbox_poc',sandbox_id:p.sandbox_id,detail:p.detail};}}
+        for(const d of dets){if(!d.verification)d.verification={status:'observed',method:'observed',sandbox_id:'',detail:d.detection.evidence||'Confirmed during testing before remediation.'};}
+        return dets;
     }
 
-    const NW=280,NH=130,GAP_X=100,GAP_Y=24;
-    function layoutNodes(steps){
-        const nodes=[];let x=40,i=0;
-        while(i<steps.length){
-            if(steps[i].type==='finding'){
-                const group=[];while(i<steps.length&&steps[i].type==='finding'){group.push(steps[i]);i++;}
-                const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
-                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.finding});
-                x+=NW+GAP_X;
-            }else if(steps[i].type==='verify'){
-                const group=[];while(i<steps.length&&steps[i].type==='verify'){group.push(steps[i]);i++;}
-                const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
-                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.verify});
-                x+=NW+GAP_X;
-            }else if(steps[i].type==='patch'){
-                const group=[];while(i<steps.length&&steps[i].type==='patch'){group.push(steps[i]);i++;}
-                const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
-                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.patch});
-                x+=NW+GAP_X;
-            }else{
-                nodes.push({x,y:300-NH/2,w:NW,h:NH,step:steps[i],color:C[steps[i].type]||C.scan});
-                x+=NW+GAP_X;i++;
-            }
-        }return nodes;
+    function reconStep(entries){
+        const svc=[],cve=[];
+        for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{};
+            if(t==='run_nmap'){for(const s of(r.results||[]))svc.push(s);}
+            else if(t==='query_hackclub'){cve.push({comp:a.component||'',ver:a.version||'',refs:(r.references||[]).length,err:r.error});}}
+        if(!svc.length&&!cve.length)return null;
+        const lines=[...svc.map(s=>'Port '+s.port+': '+s.service+(s.version?' '+s.version:'')),
+                     ...cve.map(c=>c.comp+' '+c.ver+(c.err?' (failed)':' \u2192 '+c.refs+' refs'))];
+        return {type:'recon',title:'Reconnaissance',lines:lines.slice(0,4)};
     }
-    function buildEdges(nodes){
-        const edges=[],cols=[];let lastX=-1;
-        for(const n of nodes){if(n.x!==lastX){cols.push([]);lastX=n.x;}cols[cols.length-1].push(n);}
-        for(let ci=1;ci<cols.length;ci++){for(const p of cols[ci-1])for(const c of cols[ci])edges.push([p,c]);}
-        return edges;
+
+    // --- Build pipeline lanes: recon -> scanning -> detection -> PoC -> patch --- //
+    const NW=284,NH=120,GAP_X=88,GAP_Y=34,X0=20,Y0=20;
+    function scanStep(entries){const probed=new Set();let reqs=0;for(const e of entries){if(e.tool==='send_http_request'||e.tool==='run_fuzzer'){reqs++;probed.add(normPath((e.arguments||{}).endpoint||(e.arguments||{}).url||'/'));}}if(!reqs)return null;const eps=[...probed];return{type:'scan',title:'Endpoint scanning',lines:[reqs+' request'+(reqs===1?'':'s')+' \u2192 '+eps.length+' endpoint'+(eps.length===1?'':'s'),...eps.slice(0,3)]};}
+    function buildFromVulns(vulns){
+        const nodes=[],edges=[];
+        const rows=vulns.length||1;
+        const totalH=rows*NH+(rows-1)*GAP_Y;const cy=Y0+totalH/2-NH/2;
+        const colx=i=>X0+i*(NW+GAP_X);
+        const recon=reconStep(raw),scan=scanStep(raw);
+        let ci=0,reconNode=null,scanNode=null;
+        if(recon){reconNode={x:colx(ci++),y:cy,w:NW,h:NH,...recon};nodes.push(reconNode);}
+        if(scan){scanNode={x:colx(ci++),y:cy,w:NW,h:NH,...scan};nodes.push(scanNode);}
+        if(reconNode&&scanNode)edges.push([reconNode,scanNode]);
+        const entry=scanNode||reconNode;
+        const dCol=colx(ci),vCol=colx(ci+1),pCol=colx(ci+2);
+        vulns.forEach((v,i)=>{
+            const y=Y0+i*(NH+GAP_Y);
+            const det=v.detection||{};
+            const dNode={x:dCol,y,w:NW,h:NH,type:'finding',title:v.name||'Finding',
+                lines:[(det.method?det.method+'  ':'')+(v.endpoint||''),(v.category||'')+'  \u00b7  '+(v.severity||'')+(det.status?'  \u00b7  HTTP '+det.status:''),(det.reasoning||det.evidence||'')]};
+            nodes.push(dNode);if(entry)edges.push([entry,dNode]);
+            const ver=v.verification||{};const confirmed=ver.status==='confirmed',observed=ver.status==='observed';
+            const vNode={x:vCol,y,w:NW,h:NH,type:'verify',title:confirmed?'\u2713 PoC confirmed':observed?'\u2713 Verified':'\u2717 Inconclusive',
+                lines:[confirmed?'Exploit reproduced in sandbox':observed?'Confirmed during testing':'Verification inconclusive',ver.sandbox_id?('sandbox: '+ver.sandbox_id):'',ver.detail||'']};
+            nodes.push(vNode);edges.push([dNode,vNode]);
+            const rem=v.remediation;
+            if(rem){const pNode={x:pCol,y,w:NW,h:NH,type:'patch',title:'Patch: '+String(rem.vuln_node||v.name||'').replace(/_/g,' '),
+                lines:['Remediation generated',(rem.recommendation||''),(rem.cves&&rem.cves.length?rem.cves.join(', '):'')].filter(Boolean)};
+                nodes.push(pNode);edges.push([vNode,pNode]);}
+        });
+        return {nodes,edges};
     }
-    let steps,nodes,edges;
-    function rebuild(){steps=buildSteps(raw);nodes=layoutNodes(steps);edges=buildEdges(nodes);}
+
+    let nodes=[],edges=[];
+    function rebuild(){const vulns=(VULNS&&VULNS.length)?VULNS:correlateClient(raw);const out=buildFromVulns(vulns);nodes=out.nodes;edges=out.edges;}
     rebuild();
 
-    function clipText(text,maxW){if(!text)return'';if(ctx.measureText(text).width<=maxW)return text;let t=text;while(t.length>0&&ctx.measureText(t+'\u2026').width>maxW)t=t.slice(0,-1);return t+'\u2026';}
+    function clip(text,maxW){if(!text)return'';if(ctx.measureText(text).width<=maxW)return text;let t=text;while(t.length&&ctx.measureText(t+'\u2026').width>maxW)t=t.slice(0,-1);return t+'\u2026';}
+    function resize(){const r=canvas.parentElement.getBoundingClientRect();canvas.width=r.width*dpr;canvas.height=r.height*dpr;canvas.style.width=r.width+'px';canvas.style.height=r.height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);}
+    function viewSize(){const r=canvas.parentElement.getBoundingClientRect();return{w:r.width,h:r.height};}
 
-    function resize(){const rect=canvas.parentElement.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;canvas.style.width=rect.width+'px';canvas.style.height=rect.height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);draw();}
+    function contentBounds(){
+        if(!nodes.length)return null;
+        let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
+        for(const n of nodes){a=Math.min(a,n.x);b=Math.min(b,n.y);c=Math.max(c,n.x+n.w);d=Math.max(d,n.y+n.h);}
+        const pad=70;return{x:a-pad,y:b-pad,w:(c-a)+pad*2,h:(d-b)+pad*2};
+    }
+    function fitScale(){const bb=contentBounds();if(!bb)return 1;const v=viewSize();return Math.min(v.w/bb.w,v.h/bb.h,1.4);}
+    function clampView(){
+        const bb=contentBounds();if(!bb)return;const v=viewSize();
+        scale=Math.max(fitScale(),Math.min(2.5,scale));
+        const cw=bb.w*scale,ch=bb.h*scale;
+        if(cw<=v.w)offsetX=(v.w-cw)/2-bb.x*scale;
+        else offsetX=Math.min(-bb.x*scale,Math.max(v.w-(bb.x+bb.w)*scale,offsetX));
+        if(ch<=v.h)offsetY=(v.h-ch)/2-bb.y*scale;
+        else offsetY=Math.min(-bb.y*scale,Math.max(v.h-(bb.y+bb.h)*scale,offsetY));
+    }
+
+    let flow=0;
+    function drawGrid(w,h){const step=28;const x0=(0-offsetX)/scale,y0=(0-offsetY)/scale,x1=(w-offsetX)/scale,y1=(h-offsetY)/scale;
+        const sx=Math.floor(x0/step)*step,sy=Math.floor(y0/step)*step;ctx.fillStyle='rgba(255,255,255,0.05)';const r=Math.max(0.6,0.8/scale);
+        for(let gx=sx;gx<x1;gx+=step)for(let gy=sy;gy<y1;gy+=step){ctx.beginPath();ctx.arc(gx,gy,r,0,6.2832);ctx.fill();}}
 
     function draw(){
+        clampView();
         const w=canvas.width/dpr,h=canvas.height/dpr;
         ctx.save();ctx.clearRect(0,0,w,h);ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
-        for(const[a,b]of edges){const ax=a.x+a.w,ay=a.y+a.h/2,bx=b.x,by=b.y+b.h/2;ctx.beginPath();ctx.moveTo(ax,ay);const mx=(ax+bx)/2;ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.strokeStyle='#334155';ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-10,by-5);ctx.lineTo(bx-10,by+5);ctx.closePath();ctx.fillStyle='#475569';ctx.fill();}
-        for(const n of nodes){const c=n.color;ctx.save();ctx.shadowColor=c.border+'30';ctx.shadowBlur=20;ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,14);ctx.fillStyle=c.bg;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=c.border;ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,14);ctx.clip();const pad=14,textW=n.w-pad*2;ctx.font='700 13px -apple-system,BlinkMacSystemFont,sans-serif';ctx.fillStyle=c.title;ctx.textBaseline='top';ctx.fillText(clipText(n.step.title,textW),n.x+pad,n.y+pad);ctx.font='400 11px ui-monospace,monospace';const lineH=17;let ly=n.y+pad+22;const maxLines=Math.floor((n.h-pad*2-24)/lineH);for(let li=0;li<Math.min(n.step.lines.length,maxLines);li++){ctx.fillStyle=li===0?c.text:c.dim;ctx.fillText(clipText(n.step.lines[li],textW),n.x+pad,ly);ly+=lineH;}if(n.step.lines.length>maxLines){ctx.fillStyle=c.dim;ctx.fillText('+'+(n.step.lines.length-maxLines)+' more\u2026',n.x+pad,ly);}ctx.restore();}
+        drawGrid(w,h);
+        for(const[a,b]of edges){const ax=a.x+a.w,ay=a.y+a.h/2,bx=b.x,by=b.y+b.h/2,mx=(ax+bx)/2;
+            ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.setLineDash([]);ctx.strokeStyle='rgba(255,255,255,0.10)';ctx.lineWidth=1.25;ctx.stroke();
+            ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.setLineDash([2,10]);ctx.lineDashOffset=-flow;ctx.strokeStyle='rgba(255,255,255,0.32)';ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
+            ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-8,by-4);ctx.lineTo(bx-8,by+4);ctx.closePath();ctx.fillStyle='rgba(255,255,255,0.30)';ctx.fill();}
+        for(const n of nodes){const acc=ACCENT[n.type]||'#3b82f6';const hov=n===hoverNode;
+            ctx.save();
+            // depth shadow, tinted with the accent on hover
+            ctx.shadowColor=hov?hexA(acc,0.45):'rgba(0,0,0,0.55)';ctx.shadowBlur=hov?28:16;ctx.shadowOffsetY=6;
+            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);
+            const g=ctx.createLinearGradient(n.x,n.y,n.x,n.y+n.h);g.addColorStop(0,NODE_BG2);g.addColorStop(1,NODE_BG);ctx.fillStyle=g;ctx.fill();
+            ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
+            // accent OUTLINE (replaces the old left side bar)
+            ctx.strokeStyle=hov?acc:hexA(acc,0.55);ctx.lineWidth=hov?2:1.5;ctx.stroke();
+            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);ctx.clip();
+            const pad=16,tw=n.w-pad-14;
+            // accent dot + title
+            ctx.beginPath();ctx.arc(n.x+pad+3,n.y+pad+6,3.5,0,6.2832);ctx.fillStyle=acc;ctx.fill();
+            ctx.font='600 13px Geist,-apple-system,sans-serif';ctx.fillStyle=TITLE;ctx.textBaseline='middle';
+            ctx.fillText(clip(n.title,tw-16),n.x+pad+14,n.y+pad+6);
+            // body lines
+            ctx.textBaseline='top';ctx.font='400 11px "Geist Mono",ui-monospace,monospace';
+            const lh=16;let ly=n.y+pad+24;const maxL=Math.floor((n.h-pad-26)/lh);
+            const lines=(n.lines||[]).filter(l=>l!=='');
+            for(let i=0;i<Math.min(lines.length,maxL);i++){ctx.fillStyle=i===0?BODY:DIM;ctx.fillText(clip(lines[i],tw),n.x+pad,ly);ly+=lh;}
+            ctx.restore();}
         ctx.restore();
     }
 
-    canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
-    canvas.addEventListener('mousemove',e=>{if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};draw();return;}const rect=canvas.getBoundingClientRect();const mx=(e.clientX-rect.left-offsetX)/scale,my=(e.clientY-rect.top-offsetY)/scale;let hit=null;for(const n of nodes){if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h){hit=n;break;}}if(hit){tooltip.innerHTML='<div class="font-semibold text-gray-100 mb-1">'+hit.step.title.replace(/</g,'&lt;')+'</div><div class="text-gray-300 space-y-0.5">'+hit.step.lines.map(l=>'<div>'+l.replace(/</g,'&lt;')+'</div>').join('')+'</div>';tooltip.style.left=(e.clientX-rect.left+16)+'px';tooltip.style.top=(e.clientY-rect.top-8)+'px';tooltip.classList.remove('hidden');canvas.style.cursor='pointer';}else{tooltip.classList.add('hidden');canvas.style.cursor='grab';}});
-    canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
-    canvas.addEventListener('mouseleave',()=>{dragging=false;tooltip.classList.add('hidden');});
-    canvas.addEventListener('wheel',e=>{e.preventDefault();const z=e.deltaY<0?1.12:0.88;scale*=z;scale=Math.max(0.2,Math.min(5,scale));draw();},{passive:false});
-    window.graphZoom=f=>{scale*=f;scale=Math.max(0.2,Math.min(5,scale));draw();};
-    window.graphReset=()=>{scale=1;const rect=canvas.parentElement.getBoundingClientRect();offsetX=30;offsetY=rect.height/2-300;draw();};
-    window.addEventListener('resize',resize);resize();
+    function hitTest(clientX,clientY){const r=canvas.getBoundingClientRect();const mx=(clientX-r.left-offsetX)/scale,my=(clientY-r.top-offsetY)/scale;
+        for(let i=nodes.length-1;i>=0;i--){const n=nodes[i];if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h)return n;}return null;}
 
-    // Real-time polling: update graph live, only full reload on complete
+    canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
+    canvas.addEventListener('mousemove',e=>{
+        if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};return;}
+        hoverNode=hitTest(e.clientX,e.clientY);});
+    canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
+    canvas.addEventListener('mouseleave',()=>{dragging=false;hoverNode=null;});
+    canvas.addEventListener('wheel',e=>{e.preventDefault();scale*=(e.deltaY<0?1.12:0.88);clampView();},{passive:false});
+    window.graphZoom=f=>{scale*=f;clampView();};
+    window.graphReset=()=>{scale=fitScale();clampView();};
+    window.addEventListener('resize',()=>{resize();clampView();});
+    resize();scale=fitScale();clampView();
+
+    function loop(){flow=(flow+0.45)%12;draw();requestAnimationFrame(loop);}
+    loop();
+
     if(JOB_STATUS!=='complete'&&JOB_STATUS!=='pending'){
-        const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};const nr=ag.tool_results||[];if(nr.length!==raw.length){raw=nr;rebuild();draw();}const tu=ag.token_usage;if(tu){const fmt=n=>(n||0).toLocaleString();const el=id=>document.getElementById(id);if(el('statTotal'))el('statTotal').textContent=fmt(tu.total_tokens);if(el('statPrompt'))el('statPrompt').textContent=fmt(tu.prompt_tokens);if(el('statComp'))el('statComp').textContent=fmt(tu.completion_tokens);if(el('statCalls'))el('statCalls').textContent=tu.llm_calls||0;if(el('statIter'))el('statIter').textContent=nr.length;}if(job.status==='complete'){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');setTimeout(()=>window.location.reload(),1500);}}catch(e){}},3000);
+        const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};
+            const nr=ag.tool_results||[];const nv=ag.vulnerabilities||[];let changed=false;
+            if(nr.length!==raw.length){raw=nr;changed=true;}
+            if(JSON.stringify(nv)!==JSON.stringify(VULNS)){VULNS=nv;changed=true;}
+            if(changed){rebuild();scale=fitScale();clampView();}
+            const tu=ag.token_usage;if(tu){const f=n=>(n||0).toLocaleString();const el=id=>document.getElementById(id);
+                if(el('tkTotal'))el('tkTotal').textContent=f(tu.total_tokens);if(el('tkPrompt'))el('tkPrompt').textContent=f(tu.prompt_tokens);
+                if(el('tkComp'))el('tkComp').textContent=f(tu.completion_tokens);if(el('tkCalls'))el('tkCalls').textContent=tu.llm_calls||0;}
+            const st=document.getElementById('graphSteps');if(st)st.textContent=nr.length+' steps';
+            if(job.status==='complete'){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');setTimeout(()=>window.location.reload(),1500);}
+        }catch(e){}},3000);
     }
     })();
     </script>
 
-    {% if not tool_results %}<p class="text-gray-500 text-sm mt-4">Graph will populate in real-time once the scan starts.</p>{% endif %}
+    {% if not tool_results %}<p class="text-ink-300 text-sm mt-4">Graph will populate in real-time once the scan starts.</p>{% endif %}
 
     {% if job.attack_graph_data %}
-    <details class="mt-4 group"><summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-gray-400 hover:text-gray-300 transition-colors"><svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>View Raw JSON</summary><div class="mt-3"><pre class="code-block bg-slate-900 border border-slate-700 p-4 rounded-lg overflow-x-auto text-sm max-h-96"><code class="text-green-300">{{ job.attack_graph_data | tojson(indent=2) }}</code></pre></div></details>
+    <details class="mt-4 group"><summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-ink-200 hover:text-white transition-colors"><svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>View raw JSON</summary><div class="mt-3"><pre class="code-block surface-inset p-4 overflow-x-auto text-sm max-h-96"><code>{{ job.attack_graph_data | tojson(indent=2) }}</code></pre></div></details>
     {% endif %}
 </section>
 
 <!-- Mitigations -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+<section class="card card-pad">
+    <h2 class="section-title mb-4 flex items-center gap-2">
+        <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
         Mitigations
     </h2>
     {% if mitigations %}
@@ -331,61 +525,55 @@
         {% for m in mitigations %}
         {% set meta = m.finding_metadata or {} %}
         {% set risk = (meta.risk_level or 'High') | lower %}
-        {% set risk_colors = {
-            'critical': 'bg-red-500/10 text-red-400 border-red-500/30',
-            'high':     'bg-orange-500/10 text-orange-400 border-orange-500/30',
-            'medium':   'bg-yellow-500/10 text-yellow-300 border-yellow-500/30',
-            'low':      'bg-green-500/10 text-green-400 border-green-500/30'
+        {% set risk_badge = {
+            'critical': 'badge-red',
+            'high':     'badge-orange',
+            'medium':   'badge-yellow',
+            'low':      'badge-green'
         } %}
-        <div class="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
+        <div class="surface-inset overflow-hidden">
             <!-- Finding header -->
-            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700/60">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-white/10">
                 <div class="flex items-center gap-3 min-w-0">
-                    <svg class="w-4 h-4 text-orange-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
-                    <span class="font-semibold text-gray-100 truncate">{{ m.vulnerability_node }}</span>
+                    <svg class="w-4 h-4 flex-shrink-0" style="color:#fb923c" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+                    <span class="font-semibold text-white truncate">{{ m.vulnerability_node }}</span>
                 </div>
-                <span class="ml-4 flex-shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full border {{ risk_colors.get(risk, 'bg-slate-700 text-gray-300 border-slate-600') }}">
-                    {{ (meta.risk_level or 'High') | upper }}
-                </span>
+                <span class="badge {{ risk_badge.get(risk, 'badge-neutral') }} ml-4 flex-shrink-0">{{ (meta.risk_level or 'High') | upper }}</span>
             </div>
 
             <div class="px-5 py-4 space-y-4">
-                <!-- Description -->
                 {% if meta.description %}
                 <div>
-                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">What is this issue?</p>
-                    <p class="text-sm text-gray-300 leading-relaxed">{{ meta.description }}</p>
+                    <p class="eyebrow mb-1">What is this issue?</p>
+                    <p class="text-sm text-ink-100 leading-relaxed">{{ meta.description }}</p>
                 </div>
                 {% endif %}
 
-                <!-- CVEs -->
                 {% if meta.cves %}
                 <div>
-                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">CVE References</p>
+                    <p class="eyebrow mb-1.5">CVE references</p>
                     <div class="flex flex-wrap gap-2">
                         {% for cve in meta.cves %}
-                        <span class="inline-flex items-center text-xs font-mono px-2.5 py-1 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">{{ cve }}</span>
+                        <span class="badge badge-red badge-mono">{{ cve }}</span>
                         {% endfor %}
                     </div>
                 </div>
                 {% endif %}
 
-                <!-- Recommendation -->
                 {% if meta.recommendation %}
                 <div>
-                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Recommended Fix</p>
-                    <p class="text-sm text-gray-300 leading-relaxed">{{ meta.recommendation }}</p>
+                    <p class="eyebrow mb-1">Recommended fix</p>
+                    <p class="text-sm text-ink-100 leading-relaxed">{{ meta.recommendation }}</p>
                 </div>
                 {% endif %}
 
-                <!-- Patched Code -->
                 <details class="group">
-                    <summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-cyan-400 hover:text-cyan-300 transition-colors">
+                    <summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-ink-200 hover:text-white transition-colors">
                         <svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                        View Patched Code
+                        View patched code
                     </summary>
                     <div class="mt-3">
-                        <pre class="code-block bg-slate-950 border border-slate-700 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed"><code class="text-green-300">{{ m.remediation_code or "No remediation code available" }}</code></pre>
+                        <pre class="code-block bg-black border border-white/10 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed"><code>{{ m.remediation_code or "No remediation code available" }}</code></pre>
                     </div>
                 </details>
             </div>
@@ -393,7 +581,7 @@
         {% endfor %}
     </div>
     {% else %}
-    <p class="text-gray-500 text-sm">No mitigations generated yet</p>
+    <p class="text-ink-300 text-sm">No mitigations generated yet.</p>
     {% endif %}
 </section>
 
@@ -407,8 +595,8 @@ if (startJobBtn) {
         try {
             const resp = await fetch('/api/jobs/{{ job.id }}/start', {method: 'POST'});
             if (resp.ok) { window.location.reload(); }
-            else { const data = await resp.json(); alert('Could not start scan: ' + (data.detail || 'Unknown error')); startJobBtn.disabled = false; startJobBtn.textContent = 'Start Scan'; }
-        } catch (err) { alert('Error: ' + err.message); startJobBtn.disabled = false; startJobBtn.textContent = 'Start Scan'; }
+            else { const data = await resp.json(); alert('Could not start scan: ' + (data.detail || 'Unknown error')); startJobBtn.disabled = false; startJobBtn.textContent = 'Start scan'; }
+        } catch (err) { alert('Error: ' + err.message); startJobBtn.disabled = false; startJobBtn.textContent = 'Start scan'; }
     });
 }
 </script>

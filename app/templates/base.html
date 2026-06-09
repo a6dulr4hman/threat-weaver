@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,17 +7,31 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
+            darkMode: 'class',
             theme: {
                 extend: {
                     colors: {
-                        slate: {
-                            850: '#172033',
-                            950: '#0a0f1a'
+                        // Vercel / Geist inspired grayscale
+                        ink: {
+                            50:  '#fafafa',
+                            100: '#ededed',
+                            200: '#a1a1a1',
+                            300: '#8f8f8f',
+                            400: '#707070',
+                            500: '#525252',
+                            600: '#383838',
+                            700: '#2e2e2e',
+                            800: '#1f1f1f',
+                            900: '#141414',
+                            950: '#0a0a0a'
                         }
                     },
                     fontFamily: {
-                        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace']
+                        sans: ['Geist', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
+                        mono: ['"Geist Mono"', 'JetBrains Mono', 'ui-monospace', 'monospace']
+                    },
+                    borderRadius: {
+                        xl: '0.75rem'
                     }
                 }
             }
@@ -25,27 +39,43 @@
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="bg-slate-900 min-h-screen flex flex-col font-sans text-gray-100">
-    <nav class="bg-slate-950 border-b border-slate-800 shadow-lg shadow-slate-950/50">
-        <div class="container mx-auto px-4 py-4 flex items-center justify-between">
-            <a href="/" class="flex items-center space-x-2 group">
-                <svg class="w-7 h-7 text-cyan-400 group-hover:text-cyan-300 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
-                </svg>
-                <span class="text-xl font-bold tracking-tight text-cyan-400 group-hover:text-cyan-300 transition-colors">ThreatWeaver</span>
+<body class="tw-body min-h-screen flex flex-col font-sans antialiased">
+    <div class="tw-grid-bg" aria-hidden="true"></div>
+
+    <nav class="sticky top-0 z-40 border-b border-white/10 bg-black/70 backdrop-blur-xl">
+        <div class="mx-auto max-w-6xl px-5 h-14 flex items-center justify-between">
+            <a href="/" class="flex items-center gap-2.5 group">
+                <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-black shadow-sm">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M12 2L3 6v6c0 5.25 3.75 9.4 9 10.7 5.25-1.3 9-5.45 9-10.7V6l-9-4z"/>
+                    </svg>
+                </span>
+                <span class="text-[15px] font-semibold tracking-tight text-white">ThreatWeaver</span>
             </a>
+            <div class="flex items-center gap-1 text-sm">
+                <a href="/" class="px-3 py-1.5 rounded-md text-ink-200 hover:text-white hover:bg-white/5 transition-colors">Dashboard</a>
+                <a href="/config/" class="px-3 py-1.5 rounded-md text-ink-200 hover:text-white hover:bg-white/5 transition-colors">Routing</a>
+                <a href="https://github.com/a6dulr4hman/threat-weaver" target="_blank" rel="noreferrer"
+                   class="ml-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/10 text-ink-100 hover:bg-white/5 transition-colors">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.36 9.36 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
+                    GitHub
+                </a>
+            </div>
         </div>
     </nav>
 
-    <main class="container mx-auto px-4 py-8 flex-1">
+    <main class="relative z-10 mx-auto w-full max-w-6xl px-5 py-10 flex-1">
         {% block content %}{% endblock %}
     </main>
 
-    <footer class="bg-slate-950 border-t border-slate-800 text-gray-500 text-center py-4">
-        <p class="text-sm">ThreatWeaver - Autonomous DevSecOps Engine</p>
+    <footer class="relative z-10 border-t border-white/10">
+        <div class="mx-auto max-w-6xl px-5 py-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-ink-300">
+            <p>ThreatWeaver &mdash; Autonomous DevSecOps Engine</p>
+            <p class="text-ink-400">Attack surface analysis &amp; AI remediation</p>
+        </div>
     </footer>
 </body>
 </html>
