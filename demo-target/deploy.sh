@@ -21,14 +21,12 @@ APP_DIR="/opt/nimbus-crm"
 SERVICE_NAME="nimbus-crm"
 PORT="80"
 
-echo "==> Installing system packages (python3, venv, pip, vsftpd)..."
+echo "==> Installing system packages (python3, venv, pip, iptables)..."
 if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y
-    apt-get install -y python3 python3-venv python3-pip iputils-ping vsftpd
-    VSFTPD_CONF="/etc/vsftpd.conf"
+    apt-get install -y python3 python3-venv python3-pip iputils-ping iptables
 elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y python3 python3-pip iputils vsftpd
-    VSFTPD_CONF="/etc/vsftpd/vsftpd.conf"
+    dnf install -y python3 python3-pip iputils iptables
 fi
 
 echo "==> Copying application to ${APP_DIR}..."
@@ -80,43 +78,25 @@ systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}"
 systemctl restart "${SERVICE_NAME}"
 
-# --- FTP service (vsftpd) -------------------------------------------------
-# Adds a second exposed service so reconnaissance discovers more than just the
-# web port. vsftpd advertises a recognizable version banner that nmap -sV will
-# fingerprint, and anonymous access is enabled -- a genuine, scannable
-# misconfiguration (not a spoofed banner).
-if [ -n "${VSFTPD_CONF:-}" ] && command -v vsftpd >/dev/null 2>&1; then
-    echo "==> Configuring vsftpd FTP service on port 21..."
+# --- FTP service (simulated vsftpd 2.3.4 backdoor) ------------------------
+# The demo app itself runs a minimal FTP server on port 2121 that simulates the
+# vsftpd 2.3.4 backdoor (CVE-2011-2523). We redirect port 21 -> 2121 with
+# iptables so external scanners connect on the standard FTP port but the app
+# doesn't need root privilege to bind port 21.
+echo "==> Setting up FTP backdoor simulator (port 21 -> 2121)..."
 
-    # Anonymous content for the FTP root.
-    mkdir -p /srv/ftp/pub
-    echo "Nimbus CRM file drop. Internal use only." > /srv/ftp/pub/README.txt
-    echo "backup-2026-Q1.sql.gz placeholder" > /srv/ftp/pub/backup-info.txt
+# Remove vsftpd if installed (we don't need the real one anymore).
+systemctl stop vsftpd 2>/dev/null || true
+systemctl disable vsftpd 2>/dev/null || true
 
-    cat > "${VSFTPD_CONF}" <<'FTPCONF'
-listen=YES
-listen_ipv6=NO
-# Intentional misconfiguration for the demo: anonymous FTP enabled.
-anonymous_enable=YES
-local_enable=YES
-write_enable=NO
-anon_root=/srv/ftp
-dirmessage_enable=YES
-xferlog_enable=YES
-# Recognizable banner so nmap -sV / scanners can fingerprint the service.
-ftpd_banner=vsftpd 2.3.4 ready - Nimbus CRM file service
-pasv_enable=YES
-pasv_min_port=40000
-pasv_max_port=40010
-FTPCONF
-
-    # Ensure the anonymous user exists (most distros ship 'ftp').
-    id ftp >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin ftp || true
-
-    systemctl enable vsftpd || true
-    systemctl restart vsftpd || true
-    echo "    vsftpd restarted (port 21, anonymous enabled)."
-fi
+# iptables redirect: external port 21 -> app's port 2121
+iptables -t nat -D PREROUTING -p tcp --dport 21 -j REDIRECT --to-port 2121 2>/dev/null || true
+iptables -t nat -A PREROUTING -p tcp --dport 21 -j REDIRECT --to-port 2121
+# Also handle local connections (for testing on the host itself)
+iptables -t nat -D OUTPUT -o lo -p tcp --dport 21 -j REDIRECT --to-port 2121 2>/dev/null || true
+iptables -t nat -A OUTPUT -o lo -p tcp --dport 21 -j REDIRECT --to-port 2121
+echo "    FTP backdoor simulator active (port 21 -> 2121, CVE-2011-2523)."
+echo "    Trigger: USER anyname:)  then PASS x -> opens shell on port 6200."
 
 sleep 2
 echo
@@ -135,10 +115,11 @@ echo "   Check: curl ftp://${PUBLIC_IP}/pub/   (or: ftp ${PUBLIC_IP})"
 echo
 echo " Point ThreatWeaver at: ${PUBLIC_IP}  (or your DNS name, DNS-only)"
 echo
-echo " IMPORTANT: open ports ${PORT}, 21, and 40000-40010 (FTP passive)"
-echo " in your Azure Network Security Group."
+echo " IMPORTANT: open ports ${PORT}, 21, and 6200 in your Azure NSG."
+echo "   Port 21   = FTP backdoor simulator (CVE-2011-2523 / vsftpd 2.3.4)"
+echo "   Port 6200 = backdoor shell (opens when triggered via smiley-face user)"
 echo " Teardown after the demo:"
-echo "   sudo systemctl disable --now ${SERVICE_NAME} vsftpd"
+echo "   sudo systemctl disable --now ${SERVICE_NAME}"
+echo "   sudo iptables -t nat -F"
 echo "   sudo rm -rf ${APP_DIR} /etc/systemd/system/${SERVICE_NAME}.service"
-echo "   sudo rm -rf /srv/ftp"
 echo "============================================================"

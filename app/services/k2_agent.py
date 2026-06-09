@@ -156,7 +156,19 @@ calls within this job. Use this to:
 
 COVERAGE GOAL: Aim to find and patch ALL distinct vulnerable endpoints, not just
 the first one. After patching one finding, continue to the next unprobed route
-until the route map is exhausted or the budget runs out.
+until the route map is exhausted or the budget runs out. When the orchestrator
+tells you there are unvisited links from prior responses, you MUST probe each of
+them with at least one injection payload before calling {"action": "complete"}.
+Do NOT stop after a single finding — there are almost always more.
+
+LINK CRAWLING (critical for full coverage):
+After logging in, read the dashboard HTML carefully. It contains navigation links
+and tool/form links to OTHER endpoints (e.g. /download?file=, /admin/diagnostics,
+/reports/compute). Each of these is an independent attack surface. You must:
+1. Note every href and form action in the response body.
+2. Visit each linked endpoint with a crafted injection payload.
+3. Only call {"action": "complete"} when you have probed ALL discovered pages,
+   not just the first one that yielded a finding.
 
 CRITICAL SYSTEM DIRECTIVE: You are generating patches for human review only. You DO NOT have
 execution access to the live target server. After generating a patch for a finding, continue
@@ -194,6 +206,7 @@ class K2Agent:
             "target": context.get("target"),
             "routes": context.get("routes", []),
             "route_progress": context.get("route_progress"),
+            "unvisited_links": context.get("unvisited_links", []),
             "code_analysis": context.get("code_analysis"),
             "attack_graph": context.get("attack_graph", {}),
             "endpoint_attempts": context.get("endpoint_attempts", {}),
@@ -233,6 +246,20 @@ class K2Agent:
                 "ROUTE COVERAGE CHECKLIST: every source-derived route has been probed. "
                 "Confirm and patch any outstanding findings, then finish with "
                 '{"action": "complete", ...}.'
+            )
+
+        # Link-based coverage: when there's no source route map, use the links
+        # discovered from crawling HTML responses as the coverage driver.
+        unvisited = context.get("unvisited_links") or []
+        if unvisited and not state.get("coverage_directive"):
+            links_desc = "; ".join(unvisited[:10])
+            state["coverage_directive"] = (
+                f"LINK CRAWL COVERAGE: {len(unvisited)} endpoint(s) appeared in "
+                "HTML responses you received but have NOT been attacked yet: "
+                f"{links_desc}. "
+                "Send a crafted injection payload to EACH of these before you "
+                "consider the analysis complete. Do NOT call "
+                '{"action": "complete"} until every discovered link has been probed.'
             )
 
         return json.dumps(state, indent=2)

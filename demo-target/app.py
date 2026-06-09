@@ -262,6 +262,105 @@ def compute_report():
     return jsonify({"formula": formula, "result": result, "metrics": context})
 
 
+# --- FTP backdoor simulator (CVE-2011-2523 / vsftpd 2.3.4) ----------------
+# The real vulnerability: when a client sends a username ending with ":)" the
+# trojanized vsftpd opens a root shell listener on port 6200. This simulator
+# reproduces that behaviour so the ThreatWeaver PoC can confirm the backdoor.
+# It runs as a background daemon thread alongside the Flask app.
+import socket
+import threading
+
+
+def _ftp_backdoor_server():
+    """
+    Minimal FTP server that triggers the backdoor on USER x:)
+    Opens port 6200 with a fake shell when the magic payload is sent.
+    """
+    BACKDOOR_PORT = 6200
+    FTP_PORT = 2121  # Non-privileged; deploy.sh iptables-redirects 21 -> 2121
+
+    def _handle_ftp_client(conn):
+        """Handle one FTP client connection."""
+        try:
+            conn.sendall(b"220 vsftpd 2.3.4 ready\r\n")
+            triggered = False
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
+                line = data.decode("utf-8", errors="ignore").strip()
+                if line.upper().startswith("USER") and ":)" in line:
+                    triggered = True
+                    conn.sendall(b"331 Please specify the password.\r\n")
+                elif line.upper().startswith("USER"):
+                    conn.sendall(b"331 Please specify the password.\r\n")
+                elif line.upper().startswith("PASS"):
+                    if triggered:
+                        conn.sendall(b"230 Login successful.\r\n")
+                        # Open the backdoor shell on port 6200
+                        _open_backdoor_shell()
+                    else:
+                        conn.sendall(b"530 Login incorrect.\r\n")
+                elif line.upper() == "QUIT":
+                    conn.sendall(b"221 Goodbye.\r\n")
+                    break
+                else:
+                    conn.sendall(b"500 Unknown command.\r\n")
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    def _open_backdoor_shell():
+        """Open a fake root shell on port 6200 for ~30 seconds."""
+        def _shell_handler():
+            try:
+                srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                srv.bind(("0.0.0.0", BACKDOOR_PORT))
+                srv.listen(1)
+                srv.settimeout(30)
+                client, _ = srv.accept()
+                client.sendall(b"uid=0(root) gid=0(root) groups=0(root)\n# ")
+                while True:
+                    cmd = client.recv(1024)
+                    if not cmd:
+                        break
+                    cmd_str = cmd.decode("utf-8", errors="ignore").strip()
+                    if cmd_str in ("exit", "quit"):
+                        break
+                    elif cmd_str == "id":
+                        client.sendall(b"uid=0(root) gid=0(root) groups=0(root)\n# ")
+                    elif cmd_str == "whoami":
+                        client.sendall(b"root\n# ")
+                    elif cmd_str == "uname -a":
+                        client.sendall(b"Linux nimbus-crm 5.15.0 #1 SMP x86_64 GNU/Linux\n# ")
+                    else:
+                        client.sendall(f"{cmd_str}: command executed\n# ".encode())
+                client.close()
+            except Exception:
+                pass
+            finally:
+                srv.close()
+        threading.Thread(target=_shell_handler, daemon=True).start()
+
+    # Main FTP listener loop
+    try:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("0.0.0.0", FTP_PORT))
+        srv.listen(5)
+        while True:
+            client, _ = srv.accept()
+            threading.Thread(target=_handle_ftp_client, args=(client,), daemon=True).start()
+    except Exception:
+        pass
+
+
+# Start the FTP backdoor simulator in a background thread
+threading.Thread(target=_ftp_backdoor_server, daemon=True).start()
+
+
 if __name__ == "__main__":
     init_db()
     seed_docs()

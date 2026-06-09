@@ -176,7 +176,14 @@ class MCPClient:
 
         # Cap how much of the body we feed back into the context window so a
         # large HTML page or trace can't blow the 60k token budget on its own.
-        max_body_chars = 4000
+        # NOTE: 4000 was too small — the Nimbus CRM dashboard is ~9KB and the
+        # navigation links to /admin, /download, /reports etc. appear in the
+        # second half. With only 4000 chars the agent literally can't see its
+        # attack surface and stops after one finding. 12000 chars keeps the
+        # context well under the 60k budget (even 20 iterations ≈ 240k chars of
+        # bodies, but the slim_attack_graph strips them from history) while
+        # guaranteeing that a typical HTML page's nav/links are visible.
+        max_body_chars = 12000
 
         start_time = time.monotonic()
         try:

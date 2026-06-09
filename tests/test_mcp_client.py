@@ -313,7 +313,7 @@ async def test_send_http_request_truncates_large_body():
 
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.text = "A" * 10000
+    mock_response.text = "A" * 20000
     mock_response.headers = {}
 
     with patch("httpx.AsyncClient") as mock_client_cls:
@@ -327,8 +327,8 @@ async def test_send_http_request_truncates_large_body():
         result = await client.send_http_request("GET", "http://target.local/")
 
     assert result["body_truncated"] is True
-    assert len(result["body"]) == 4000
-    assert result["response_length"] == 10000
+    assert len(result["body"]) == 12000
+    assert result["response_length"] == 20000
 
 
 async def test_send_http_request_transport_error_not_anomaly():

@@ -217,6 +217,8 @@ class OrchestratorFSM:
                     # Source-derived coverage checklist: which routes still need
                     # probing. This is what DRIVES the loop — see build_state_message.
                     "route_progress": self._route_progress(),
+                    # Link-based coverage: URLs discovered in HTML but not yet attacked.
+                    "unvisited_links": self._unvisited_links(),
                     "endpoint_attempts": self.attack_graph.get("endpoint_attempts", {}),
                     "exhausted_endpoints": self.attack_graph.get("exhausted_endpoints", []),
                     "iteration": iteration,
@@ -384,12 +386,31 @@ class OrchestratorFSM:
                                 "generate_patch again until a NEW anomaly is triggered."
                             )
                         else:
-                            agent.feed_note(
-                                f"Patch stored for '{vuln_node}'. No source-derived "
-                                "route map is available — keep probing any endpoints "
-                                "you still have evidence for, then finish when no "
-                                "useful action remains."
-                            )
+                            # No route map available — build an "unvisited links"
+                            # list from URLs seen in prior responses vs. what
+                            # endpoint_attempts already probed. This is the best
+                            # approximation of coverage in pure-DAST mode.
+                            unvisited = self._unvisited_links()
+                            if unvisited:
+                                links_desc = ", ".join(unvisited[:8])
+                                agent.feed_note(
+                                    f"Patch stored for '{vuln_node}'. You have "
+                                    f"{len(unvisited)} endpoint(s) that appeared in "
+                                    "prior HTML responses but have NOT been attacked "
+                                    f"yet: {links_desc}. Probe each of them with a "
+                                    "crafted payload BEFORE finishing. The session "
+                                    "cookie persists. Do NOT call generate_patch "
+                                    "again until a NEW anomaly is triggered on a "
+                                    "different endpoint."
+                                )
+                            else:
+                                agent.feed_note(
+                                    f"Patch stored for '{vuln_node}'. Continue "
+                                    "probing any endpoints you still have evidence "
+                                    "for. Do NOT finish until you have attempted at "
+                                    "least one injection payload on every distinct "
+                                    "page you discovered during this session."
+                                )
 
                     # Track PoC attempts so the guardrail above can cap them.
                     if tool_name == "execute_safe_poc":
@@ -996,6 +1017,49 @@ class OrchestratorFSM:
                 for r in unprobed
             ],
         }
+
+    # --- Link-based coverage (pure DAST, no route map) ---------------------
+
+    def _unvisited_links(self) -> list[str]:
+        """
+        Extract URLs/paths that appeared in prior HTML responses but have NOT
+        yet been attacked (i.e. are not in endpoint_attempts). This is the
+        best-effort coverage driver when no source-derived route map exists:
+        the scanner discovers pages by crawling links, so at minimum it should
+        attack every link it saw.
+
+        Returns a list of path strings (e.g. ["/download?file=welcome.txt",
+        "/admin/diagnostics?host=localhost"]).
+        """
+        discovered: set[str] = set()
+        for entry in self.attack_graph.get("tool_results", []):
+            result = entry.get("result") or {}
+            body = result.get("body") or ""
+            if not body:
+                continue
+            # Extract href="..." and action="..." from HTML responses.
+            for match in re.finditer(r'(?:href|action)="([^"]*)"', body):
+                url = match.group(1)
+                if not url or url.startswith(("#", "javascript:", "mailto:")):
+                    continue
+                # Keep only same-origin paths (starting with /).
+                if url.startswith("/"):
+                    discovered.add(url.split("#")[0])
+
+        # Compare discovered paths against what we already probed.
+        probed_paths = self._probed_url_paths()
+        unvisited = []
+        for link in sorted(discovered):
+            path_only = link.split("?")[0].rstrip("/") or "/"
+            if path_only in SKIP_ROUTE_PATHS:
+                continue
+            # Check if we already hit this exact link OR its base path.
+            if path_only in probed_paths or link.split("?")[0] in probed_paths:
+                continue
+            if any(self._route_path_matches(path_only, p) for p in probed_paths):
+                continue
+            unvisited.append(link)
+        return unvisited
 
     # --- Final K2 vulnerability assessment --------------------------------
 
