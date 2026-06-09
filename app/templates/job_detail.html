@@ -12,6 +12,15 @@
             <p class="font-mono text-xs text-ink-200 mt-1.5">{{ job.id }}</p>
         </div>
         <div class="flex items-center gap-3">
+            {% set started_at = job.attack_graph_data.started_at if job.attack_graph_data else None %}
+            {% set completed_at = job.attack_graph_data.completed_at if job.attack_graph_data else None %}
+            <span id="scanTimer"
+                  class="badge badge-neutral badge-mono tabular-nums {% if not started_at %}hidden{% endif %}"
+                  data-started="{{ started_at or '' }}"
+                  data-completed="{{ completed_at or '' }}">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span id="scanTimerValue">00:00</span>
+            </span>
             {% if job.status in ["pending", "ready"] %}
             <button id="start-job-btn" class="btn btn-primary btn-sm">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -35,38 +44,34 @@
     </div>
 </div>
 
-<!-- FSM State Progress Stepper -->
-<section class="card card-pad mb-6">
-    <h2 class="section-title mb-6">Pipeline progress</h2>
+<!-- FSM State Progress Stepper (compact) -->
+<section class="card px-5 py-4 mb-6">
     {% set states = ["ready", "recon", "dast_testing", "poc_verification", "blue_team_remediation", "complete"] %}
     {% set state_labels = {"ready": "Ready", "recon": "Recon", "dast_testing": "DAST", "poc_verification": "PoC Verify", "blue_team_remediation": "Remediation", "complete": "Complete"} %}
     {% set display_phase = 'complete' if job.status == 'complete' else (job.pipeline_phase if job.pipeline_phase else job.status) %}
     {% set current_index = (states | length) if job.status == 'complete' else (states.index(display_phase) if display_phase in states else 0) %}
 
-    <div class="flex items-center justify-between w-full overflow-x-auto pb-2">
+    <div class="flex items-center w-full overflow-x-auto" id="pipelineStepper" data-phase="{{ display_phase }}">
         {% for state in states %}
-        <div class="flex items-center {% if not loop.last %}flex-1{% endif %}">
-            <div class="flex flex-col items-center min-w-[64px]">
+        <div class="flex items-center {% if not loop.last %}flex-1{% endif %}" data-step="{{ loop.index0 }}">
+            <div class="flex flex-col items-center min-w-[48px]">
                 {% if loop.index0 < current_index %}
-                <!-- Completed -->
-                <div class="w-8 h-8 rounded-full bg-white flex items-center justify-center">
-                    <svg class="w-4 h-4 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+                <div class="w-6 h-6 rounded-full bg-white flex items-center justify-center" data-circle>
+                    <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
                 </div>
                 {% elif loop.index0 == current_index %}
-                <!-- Current -->
-                <div class="w-8 h-8 rounded-full bg-white flex items-center justify-center pulse-ring">
-                    <div class="w-2.5 h-2.5 rounded-full bg-black"></div>
+                <div class="w-6 h-6 rounded-full bg-white flex items-center justify-center pulse-ring" data-circle>
+                    <div class="w-2 h-2 rounded-full bg-black"></div>
                 </div>
                 {% else %}
-                <!-- Future -->
-                <div class="w-8 h-8 rounded-full border border-ink-700 flex items-center justify-center">
-                    <div class="w-1.5 h-1.5 rounded-full bg-ink-600"></div>
+                <div class="w-6 h-6 rounded-full border border-ink-700 flex items-center justify-center" data-circle>
+                    <div class="w-1 h-1 rounded-full bg-ink-600"></div>
                 </div>
                 {% endif %}
-                <span class="text-[11px] mt-2 text-center {% if loop.index0 == current_index %}text-white font-medium{% elif loop.index0 < current_index %}text-ink-100{% else %}text-ink-400{% endif %}">{{ state_labels[state] }}</span>
+                <span class="text-[10px] mt-1 text-center leading-tight {% if loop.index0 == current_index %}text-white font-medium{% elif loop.index0 < current_index %}text-ink-100{% else %}text-ink-400{% endif %}" data-label>{{ state_labels[state] }}</span>
             </div>
             {% if not loop.last %}
-            <div class="flex-1 mx-2 h-px {% if loop.index0 < current_index %}bg-white{% else %}bg-ink-800{% endif %} hidden sm:block"></div>
+            <div class="flex-1 mx-1.5 h-px {% if loop.index0 < current_index %}bg-white{% else %}bg-ink-800{% endif %} hidden sm:block" data-line></div>
             {% endif %}
         </div>
         {% endfor %}
@@ -107,40 +112,8 @@
 </section>
 {% endif %}
 
-<!-- K2-Think-v2 Token Usage Counter -->
-{% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data else None %}
-{% if job.attack_graph_data %}
-<section class="card card-pad mb-6">
-    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <h2 class="section-title flex items-center gap-2">
-            <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
-            K2-Think-v2 token usage
-        </h2>
-        <span class="text-xs text-ink-400">{{ "MBZUAI-IFM/K2-Think-v2" }}</span>
-    </div>
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden">
-        <div class="bg-ink-950 px-5 py-4">
-            <div class="eyebrow">Total tokens</div>
-            <div class="mt-1 text-2xl font-semibold text-white tracking-tight" id="tkTotal">{{ "{:,}".format(token_usage.total_tokens or 0) if token_usage else 0 }}</div>
-        </div>
-        <div class="bg-ink-950 px-5 py-4">
-            <div class="eyebrow">Prompt</div>
-            <div class="mt-1 text-2xl font-semibold text-ink-100 tracking-tight" id="tkPrompt">{{ "{:,}".format(token_usage.prompt_tokens or 0) if token_usage else 0 }}</div>
-        </div>
-        <div class="bg-ink-950 px-5 py-4">
-            <div class="eyebrow">Completion</div>
-            <div class="mt-1 text-2xl font-semibold text-ink-100 tracking-tight" id="tkComp">{{ "{:,}".format(token_usage.completion_tokens or 0) if token_usage else 0 }}</div>
-        </div>
-        <div class="bg-ink-950 px-5 py-4">
-            <div class="eyebrow">API calls</div>
-            <div class="mt-1 text-2xl font-semibold text-ink-100 tracking-tight" id="tkCalls">{{ token_usage.llm_calls or 0 if token_usage else 0 }}</div>
-        </div>
-    </div>
-    <p class="text-xs text-ink-400 mt-3">Counts every K2-Think-v2 call this scan made: agent reasoning, patch synthesis, and the final assessment.</p>
-</section>
-{% endif %}
-
 <!-- K2-Think-v2 Security Assessment -->
+{% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data else None %}
 {% set assessment = job.attack_graph_data.final_assessment if job.attack_graph_data else None %}
 {% set vuln_counts = job.attack_graph_data.vulnerability_counts if job.attack_graph_data else None %}
 {% if assessment %}
@@ -491,18 +464,82 @@
     function loop(){flow=(flow+0.45)%12;draw();requestAnimationFrame(loop);}
     loop();
 
-    if(JOB_STATUS!=='complete'&&JOB_STATUS!=='pending'){
+    if(JOB_STATUS!=='complete'){
+        function startLivePoll(){
+        let lastPhase=document.getElementById('pipelineStepper')?document.getElementById('pipelineStepper').dataset.phase:'';
+        let lastMitCount=document.querySelectorAll('#mitigationsContainer .surface-inset').length;
+        const STATES=['ready','recon','dast_testing','poc_verification','blue_team_remediation','complete'];
+
+        function updateStepper(phase,isComplete){
+            const el=document.getElementById('pipelineStepper');if(!el)return;
+            const idx=isComplete?STATES.length:(STATES.indexOf(phase)>=0?STATES.indexOf(phase):0);
+            const prevIdx=parseInt(el.dataset.idx||'-1',10);
+            const steps=el.querySelectorAll('[data-step]');
+            steps.forEach((s,i)=>{
+                const circle=s.querySelector('[data-circle]');const line=s.querySelector('[data-line]');const label=s.querySelector('[data-label]');
+                if(!circle)return;
+                const advanced=i<=idx&&i>prevIdx;  // pop only steps that newly changed
+                if(i<idx){circle.className='w-6 h-6 rounded-full bg-white flex items-center justify-center';circle.innerHTML='<svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-ink-100';}
+                else if(i===idx){circle.className='w-6 h-6 rounded-full bg-white flex items-center justify-center pulse-ring';circle.innerHTML='<div class="w-2 h-2 rounded-full bg-black"></div>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-white font-medium';}
+                else{circle.className='w-6 h-6 rounded-full border border-ink-700 flex items-center justify-center';circle.innerHTML='<div class="w-1 h-1 rounded-full bg-ink-600"></div>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-ink-400';}
+                if(advanced){circle.classList.add('step-pop');setTimeout(()=>circle.classList.remove('step-pop'),450);}
+                if(line){line.className='flex-1 mx-1.5 h-px hidden sm:block '+(i<idx?'bg-white':'bg-ink-800');}
+            });
+            el.dataset.phase=phase;el.dataset.idx=String(idx);
+        }
+
+        async function fetchMitigations(){
+            try{const resp=await fetch('/api/jobs/'+JOB_ID+'/mitigations');if(!resp.ok)return;const mits=await resp.json();
+                if(!mits||!mits.length)return;if(mits.length===lastMitCount)return;lastMitCount=mits.length;
+                const container=document.getElementById('mitigationsContainer');const empty=document.getElementById('mitigationsEmpty');
+                if(empty)empty.remove();
+                if(!container){const sec=document.querySelector('[data-mitigations-section]');if(sec){const d=document.createElement('div');d.id='mitigationsContainer';d.className='space-y-4';sec.appendChild(d);}}
+                const c=document.getElementById('mitigationsContainer');if(!c)return;
+                const sevBadge={critical:'badge-red',high:'badge-orange',medium:'badge-yellow',low:'badge-green'};
+                c.innerHTML=mits.map(m=>{const meta=m.finding_metadata||{};const risk=(meta.risk_level||'High').toLowerCase();const badge=sevBadge[risk]||'badge-neutral';
+                    return '<div class="surface-inset overflow-hidden mit-in"><div class="flex items-center justify-between px-5 py-4 border-b border-white/10"><div class="flex items-center gap-3 min-w-0"><svg class="w-4 h-4 flex-shrink-0" style="color:#fb923c" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg><span class="font-semibold text-white truncate">'+esc(m.vulnerability_node)+'</span></div><span class="badge '+badge+' ml-4 flex-shrink-0">'+(meta.risk_level||'High').toUpperCase()+'</span></div><div class="px-5 py-4 space-y-4">'
+                    +(meta.description?'<div><p class="eyebrow mb-1">What is this issue?</p><p class="text-sm text-ink-100 leading-relaxed">'+esc(meta.description)+'</p></div>':'')
+                    +(meta.cves&&meta.cves.length?'<div><p class="eyebrow mb-1.5">CVE references</p><div class="flex flex-wrap gap-2">'+meta.cves.map(c=>'<span class="badge badge-red badge-mono">'+esc(c)+'</span>').join('')+'</div></div>':'')
+                    +(meta.recommendation?'<div><p class="eyebrow mb-1">Recommended fix</p><p class="text-sm text-ink-100 leading-relaxed">'+esc(meta.recommendation)+'</p></div>':'')
+                    +'<details class="group"><summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-ink-200 hover:text-white transition-colors"><svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>View patched code</summary><div class="mt-3"><pre class="code-block bg-black border border-white/10 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed"><code>'+esc(m.remediation_code||'No remediation code available')+'</code></pre></div></details></div></div>';
+                }).join('');
+            }catch(e){}
+        }
+
+        function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
         const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};
+            // Live stepper update
+            const phase=job.pipeline_phase||job.status||'';const isComplete=job.status==='complete';
+            if(phase!==lastPhase||isComplete){lastPhase=phase;updateStepper(isComplete?'complete':phase,isComplete);}
+            // Live graph update
             const nr=ag.tool_results||[];const nv=ag.vulnerabilities||[];let changed=false;
             if(nr.length!==raw.length){raw=nr;changed=true;}
             if(JSON.stringify(nv)!==JSON.stringify(VULNS)){VULNS=nv;changed=true;}
             if(changed){rebuild();scale=fitScale();clampView();}
-            const tu=ag.token_usage;if(tu){const f=n=>(n||0).toLocaleString();const el=id=>document.getElementById(id);
-                if(el('tkTotal'))el('tkTotal').textContent=f(tu.total_tokens);if(el('tkPrompt'))el('tkPrompt').textContent=f(tu.prompt_tokens);
-                if(el('tkComp'))el('tkComp').textContent=f(tu.completion_tokens);if(el('tkCalls'))el('tkCalls').textContent=tu.llm_calls||0;}
+            // Live token counter
+            // Live token counter (animated count-up + flash)
+            const tu=ag.token_usage;if(tu){const el=id=>document.getElementById(id);
+                if(el('tkTotal'))window.__animateNum(el('tkTotal'),tu.total_tokens);if(el('tkPrompt'))window.__animateNum(el('tkPrompt'),tu.prompt_tokens);
+                if(el('tkComp'))window.__animateNum(el('tkComp'),tu.completion_tokens);if(el('tkCalls'))window.__animateNum(el('tkCalls'),tu.llm_calls);}
+            // Live scan timer
+            if(window.__updateScanTimer)window.__updateScanTimer(ag.started_at,ag.completed_at);
             const st=document.getElementById('graphSteps');if(st)st.textContent=nr.length+' steps';
-            if(job.status==='complete'){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');setTimeout(()=>window.location.reload(),1500);}
+            // Live mitigations
+            await fetchMitigations();
+            // On complete: one final reload to pick up the report link + final assessment
+            // Only treat as TRULY complete when the report is generated (not just
+            // when status flips — the orchestrator can set status=complete after
+            // the first patch while more work is still pending).
+            const isFinalized=isComplete&&ag.report&&ag.report.status;
+            if(isFinalized){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');
+                const li=document.getElementById('live-indicator');if(li)li.outerHTML='<span class="badge badge-green"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Complete</span>';
+                setTimeout(()=>window.location.reload(),2000);}
         }catch(e){}},3000);
+        }
+        window.__startLivePoll=startLivePoll;
+        // Auto-start polling if the job is already running (not pending/ready).
+        if(JOB_STATUS!=='pending'&&JOB_STATUS!=='ready') startLivePoll();
     }
     })();
     </script>
@@ -515,13 +552,13 @@
 </section>
 
 <!-- Mitigations -->
-<section class="card card-pad">
+<section class="card card-pad" data-mitigations-section>
     <h2 class="section-title mb-4 flex items-center gap-2">
         <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
         Mitigations
     </h2>
     {% if mitigations %}
-    <div class="space-y-4">
+    <div class="space-y-4" id="mitigationsContainer">
         {% for m in mitigations %}
         {% set meta = m.finding_metadata or {} %}
         {% set risk = (meta.risk_level or 'High') | lower %}
@@ -581,22 +618,122 @@
         {% endfor %}
     </div>
     {% else %}
-    <p class="text-ink-300 text-sm">No mitigations generated yet.</p>
+    <p class="text-ink-300 text-sm" id="mitigationsEmpty">No mitigations generated yet.</p>
     {% endif %}
 </section>
 
+<!-- K2-Think-v2 Token Usage Counter -->
+{% if job.attack_graph_data %}
+<section class="card card-pad mt-6">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 class="section-title flex items-center gap-2">
+            <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
+            K2-Think-v2 token usage
+        </h2>
+        <span class="text-xs text-ink-400">MBZUAI-IFM/K2-Think-v2</span>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden">
+        <div class="bg-ink-950 px-4 py-3">
+            <div class="eyebrow">Total tokens</div>
+            <div class="mt-0.5 text-lg font-semibold text-white tracking-tight" id="tkTotal">{{ "{:,}".format(token_usage.total_tokens or 0) if token_usage else 0 }}</div>
+        </div>
+        <div class="bg-ink-950 px-4 py-3">
+            <div class="eyebrow">Prompt</div>
+            <div class="mt-0.5 text-lg font-semibold text-ink-100 tracking-tight" id="tkPrompt">{{ "{:,}".format(token_usage.prompt_tokens or 0) if token_usage else 0 }}</div>
+        </div>
+        <div class="bg-ink-950 px-4 py-3">
+            <div class="eyebrow">Completion</div>
+            <div class="mt-0.5 text-lg font-semibold text-ink-100 tracking-tight" id="tkComp">{{ "{:,}".format(token_usage.completion_tokens or 0) if token_usage else 0 }}</div>
+        </div>
+        <div class="bg-ink-950 px-4 py-3">
+            <div class="eyebrow">API calls</div>
+            <div class="mt-0.5 text-lg font-semibold text-ink-100 tracking-tight" id="tkCalls">{{ token_usage.llm_calls or 0 if token_usage else 0 }}</div>
+        </div>
+    </div>
+    <p class="text-xs text-ink-400 mt-2">Counts every K2-Think-v2 call: agent reasoning, patch synthesis, and final assessment.</p>
+</section>
+{% endif %}
+
 <script>
-// Start Scan button (shown for pending/ready jobs).
+// --- Scan duration timer ------------------------------------------------ //
+(function(){
+    const el = document.getElementById('scanTimer');
+    if (!el) return;
+    const val = document.getElementById('scanTimerValue');
+    let started = parseFloat(el.dataset.started) || 0;
+    let completed = parseFloat(el.dataset.completed) || 0;
+    let timer = null;
+    function fmt(sec){
+        sec = Math.max(0, Math.floor(sec));
+        const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+        const mm = String(m).padStart(2,'0'), ss = String(s).padStart(2,'0');
+        return h>0 ? (h+':'+mm+':'+ss) : (mm+':'+ss);
+    }
+    function render(){
+        if (!started) { el.classList.add('hidden'); return; }
+        el.classList.remove('hidden');
+        if (completed) {
+            val.textContent = fmt(completed - started);
+            el.classList.remove('badge-neutral'); el.classList.add('badge-green');
+            if (timer) { clearInterval(timer); timer = null; }
+        } else {
+            val.textContent = fmt(Date.now()/1000 - started);
+        }
+    }
+    // Let the poll loop feed fresh timestamps in.
+    window.__updateScanTimer = function(s, c){
+        if (s && !started) started = s;
+        if (c) completed = c;
+        if (started && !completed && !timer) timer = setInterval(render, 1000);
+        render();
+    };
+    render();
+    if (started && !completed) timer = setInterval(render, 1000);
+})();
+
+// --- Animated number count-up (token counter) --------------------------- //
+window.__animateNum = function(el, to){
+    if (!el) return;
+    const from = parseInt((el.textContent||'0').replace(/[^0-9]/g,''), 10) || 0;
+    to = to || 0;
+    if (from === to) return;
+    el.classList.remove('tk-flash'); void el.offsetWidth; el.classList.add('tk-flash');
+    const dur = 600, t0 = performance.now();
+    function step(now){
+        const p = Math.min(1, (now - t0) / dur);
+        const eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = Math.round(from + (to - from) * eased).toLocaleString();
+        if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+};
+</script>
+
+<script>
+// Start Scan button — show immediate feedback + kick off polling.
 const startJobBtn = document.getElementById('start-job-btn');
 if (startJobBtn) {
     startJobBtn.addEventListener('click', async () => {
         startJobBtn.disabled = true;
-        startJobBtn.textContent = 'Starting...';
+        startJobBtn.innerHTML = '<span class="relative flex h-2 w-2 mr-1.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span></span>Starting\u2026';
         try {
             const resp = await fetch('/api/jobs/{{ job.id }}/start', {method: 'POST'});
-            if (resp.ok) { window.location.reload(); }
-            else { const data = await resp.json(); alert('Could not start scan: ' + (data.detail || 'Unknown error')); startJobBtn.disabled = false; startJobBtn.textContent = 'Start scan'; }
-        } catch (err) { alert('Error: ' + err.message); startJobBtn.disabled = false; startJobBtn.textContent = 'Start scan'; }
+            if (resp.ok) {
+                // Replace button with live indicator immediately.
+                startJobBtn.outerHTML = '<span id="live-indicator" class="badge badge-neutral"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span></span>Scanning live</span>';
+                // Kick off poll loop (the graph IIFE skipped it because JOB_STATUS was pending/ready).
+                if (window.__startLivePoll) window.__startLivePoll();
+            } else {
+                const data = await resp.json();
+                alert('Could not start scan: ' + (data.detail || 'Unknown error'));
+                startJobBtn.disabled = false;
+                startJobBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Start scan';
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+            startJobBtn.disabled = false;
+            startJobBtn.textContent = 'Start scan';
+        }
     });
 }
 </script>

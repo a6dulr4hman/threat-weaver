@@ -359,3 +359,76 @@ details summary::marker { content: ''; }
     .card, .surface-inset { background: #fff !important; border-color: #e5e5e5 !important; box-shadow: none !important; }
     pre, code { background: #f7f7f7 !important; color: #111 !important; border: 1px solid #e5e5e5 !important; }
 }
+
+
+/* ============================================================
+   Motion — tasteful entrance + state-change animations
+   ============================================================ */
+
+/* Staggered card entrance on page load */
+@keyframes cardIn {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: none; }
+}
+
+main > section,
+main > div {
+    animation: cardIn 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+main > *:nth-child(2)  { animation-delay: 0.04s; }
+main > *:nth-child(3)  { animation-delay: 0.08s; }
+main > *:nth-child(4)  { animation-delay: 0.12s; }
+main > *:nth-child(5)  { animation-delay: 0.16s; }
+main > *:nth-child(6)  { animation-delay: 0.20s; }
+main > *:nth-child(7)  { animation-delay: 0.24s; }
+main > *:nth-child(8)  { animation-delay: 0.28s; }
+main > *:nth-child(9)  { animation-delay: 0.32s; }
+
+/* Stepper circle pop when a step advances */
+@keyframes popIn {
+    0%   { transform: scale(0.4); opacity: 0; }
+    60%  { transform: scale(1.18); }
+    100% { transform: scale(1); opacity: 1; }
+}
+.step-pop { animation: popIn 0.42s cubic-bezier(0.2, 0.8, 0.2, 1.2); }
+
+/* Mitigation card slide-in as findings land */
+@keyframes slideFade {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+}
+.mit-in { animation: slideFade 0.45s ease both; }
+
+/* Brief highlight flash on a value that just updated (token counter) */
+@keyframes tkFlash {
+    0%   { color: #fff; text-shadow: 0 0 12px rgba(255,255,255,0.5); }
+    100% { color: inherit; text-shadow: none; }
+}
+.tk-flash { animation: tkFlash 0.7s ease; }
+
+/* Smooth, springy transitions on interactive chrome */
+.btn, .badge, .card-hover, .link, .link-muted, .tw-table tbody tr {
+    transition: all 0.2s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.btn:active { transform: scale(0.97); }
+
+/* Section dividers + connector lines animate their fill */
+#pipelineStepper [data-line] { transition: background-color 0.4s ease; }
+#pipelineStepper [data-circle] { transition: background-color 0.3s ease, border-color 0.3s ease; }
+
+/* Live status badge shimmer */
+@keyframes shimmer {
+    0%   { opacity: 0.5; }
+    50%  { opacity: 1; }
+    100% { opacity: 0.5; }
+}
+#live-indicator { animation: shimmer 2.2s ease-in-out infinite; }
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+    }
+}

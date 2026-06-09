@@ -81,6 +81,7 @@ class MitigationResponse(BaseModel):
     job_id: str
     vulnerability_node: str
     remediation_code: Optional[str] = None
+    finding_metadata: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 

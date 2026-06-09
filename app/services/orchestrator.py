@@ -216,6 +216,10 @@ class OrchestratorFSM:
 
         await self.hydrate_state()
 
+        # Record scan start (epoch seconds) once, for the duration timer.
+        if not self.attack_graph.get("started_at"):
+            self.attack_graph["started_at"] = time.time()
+
         # If already complete, nothing to do
         if self.state == FSMState.COMPLETE:
             return self.state
@@ -721,6 +725,10 @@ class OrchestratorFSM:
 
         severity = self._score_severity()
         self.attack_graph["overall_severity"] = severity
+
+        # Stamp completion time so the UI can show total scan duration.
+        self.attack_graph.setdefault("started_at", time.time())
+        self.attack_graph["completed_at"] = time.time()
 
         # Correlate detections <-> PoCs <-> patches into ONE canonical set, so
         # detected == tested == remediated == total and each PoC maps to its
