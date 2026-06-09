@@ -2,128 +2,124 @@
 
 {% block content %}
 <div class="mb-6">
-    <h1 class="text-2xl font-bold text-gray-100 font-mono">{{ workspace.target_url }}</h1>
-    <p class="text-gray-400 text-sm mt-1">Workspace detail and verification</p>
+    <a href="/" class="inline-flex items-center gap-1.5 text-xs link-muted mb-4">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Back to dashboard
+    </a>
+    <div class="flex items-center gap-3 flex-wrap">
+        <h1 class="page-title font-mono">{{ workspace.target_url }}</h1>
+        {% if workspace.verification_status %}
+        <span class="badge badge-green"><span class="badge-dot"></span>Verified</span>
+        {% else %}
+        <span class="badge badge-amber"><span class="badge-dot"></span>Unverified</span>
+        {% endif %}
+    </div>
+    <p class="page-subtitle">Workspace detail and domain verification.</p>
 </div>
 
 <!-- Verification Status Banner -->
-<div class="mb-6 rounded-xl overflow-hidden">
+<div class="mb-6 card overflow-hidden">
     {% if workspace.verification_status %}
-    <div class="bg-gradient-to-r from-green-600/20 to-emerald-600/20 border border-green-500/30 p-4 flex items-center space-x-3">
-        <svg class="w-6 h-6 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-        <span class="text-green-300 font-medium">Domain Verified</span>
+    <div class="flex items-center gap-3 px-5 py-4 border-l-2" style="border-left-color:#4ade80;">
+        <svg class="w-5 h-5 flex-shrink-0" style="color:#4ade80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        <span class="text-sm font-medium text-white">Domain verified — scanning enabled.</span>
     </div>
     {% else %}
-    <div class="bg-gradient-to-r from-amber-600/20 to-orange-600/20 border border-amber-500/30 p-4 flex items-center space-x-3">
-        <svg class="w-6 h-6 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
-        <span class="text-amber-300 font-medium">Domain Not Verified</span>
+    <div class="flex items-center gap-3 px-5 py-4 border-l-2" style="border-left-color:#fbbf24;">
+        <svg class="w-5 h-5 flex-shrink-0" style="color:#fbbf24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+        <span class="text-sm font-medium text-white">Domain not verified — complete DNS verification below.</span>
     </div>
     {% endif %}
 </div>
 
 <!-- Verification Instructions -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-        DNS Verification
-    </h2>
-    <p class="text-sm text-gray-400 mb-4">To verify ownership, add a DNS TXT record with these details:</p>
+<section class="card card-pad mb-6">
+    <h2 class="section-title mb-1">DNS verification</h2>
+    <p class="text-sm text-ink-200 mb-5">To verify ownership, add a DNS TXT record with the values below.</p>
 
     <div class="space-y-4">
         <div>
-            <div class="flex items-center justify-between mb-1">
-                <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Step 1: Record Name</span>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex items-center justify-between group">
-                <code class="font-mono text-sm text-cyan-300 break-all select-all">_threatweaver.{{ workspace.target_url }}</code>
+            <span class="eyebrow">Step 1 &mdash; Record name</span>
+            <div class="surface-inset px-4 py-3 mt-1.5">
+                <code class="font-mono text-sm text-ink-100 break-all select-all">_threatweaver.{{ workspace.target_url }}</code>
             </div>
         </div>
 
         <div>
-            <div class="flex items-center justify-between mb-1">
-                <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Step 2: Record Value (Nonce)</span>
-            </div>
-            <div class="bg-slate-900 border border-slate-700 rounded-lg p-3 flex items-center justify-between group">
-                <code class="font-mono text-sm text-cyan-300 break-all select-all">{{ workspace.verification_nonce }}</code>
+            <span class="eyebrow">Step 2 &mdash; Record value (nonce)</span>
+            <div class="surface-inset px-4 py-3 mt-1.5">
+                <code class="font-mono text-sm text-ink-100 break-all select-all">{{ workspace.verification_nonce }}</code>
             </div>
         </div>
 
-        <p class="text-xs text-gray-500">Alternatively, serve this nonce at <code class="text-gray-400 bg-slate-900 px-1.5 py-0.5 rounded">https://{{ workspace.target_url }}/threatweaver.txt</code></p>
+        <p class="text-xs text-ink-300">Alternatively, serve this nonce at <code class="font-mono text-ink-100 bg-white/5 px-1.5 py-0.5 rounded">https://{{ workspace.target_url }}/threatweaver.txt</code></p>
     </div>
 
-    <div class="mt-6 flex items-center space-x-4">
-        <span>
-            {% if workspace.verification_status %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20">Verified</span>
-            {% else %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Unverified</span>
-            {% endif %}
-        </span>
-        <button id="verify-btn"
-                class="bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-900 px-5 py-2 rounded-lg font-medium hover:shadow-lg hover:shadow-amber-500/25 transition-all text-sm">
-            Verify Domain
+    <div class="mt-6 pt-5 border-t border-white/10 flex items-center gap-4">
+        <button id="verify-btn" class="btn btn-secondary">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Verify domain
         </button>
+        <span class="text-xs text-ink-300">Re-checks the DNS TXT record now.</span>
     </div>
 </section>
 
 <!-- Jobs Table -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6">
-    <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold text-gray-100">Analysis Jobs</h2>
+<section class="card">
+    <div class="flex items-center justify-between px-6 pt-5 pb-4">
+        <h2 class="section-title">Analysis jobs</h2>
         {% if workspace.verification_status %}
-        <button id="start-scan-btn"
-                class="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-5 py-2 rounded-lg font-medium hover:shadow-lg hover:shadow-cyan-500/25 transition-all text-sm flex items-center">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            Start New Scan
+        <button id="start-scan-btn" class="btn btn-primary btn-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Start new scan
         </button>
         {% else %}
-        <span class="text-xs text-gray-500 italic">Verify the domain to enable scanning</span>
+        <span class="text-xs text-ink-400">Verify the domain to enable scanning</span>
         {% endif %}
     </div>
     <div class="overflow-x-auto">
-        <table class="w-full text-left">
+        <table class="tw-table">
             <thead>
-                <tr class="border-b border-slate-700 text-gray-400 text-sm uppercase tracking-wider">
-                    <th class="py-3 px-4">Job ID</th>
-                    <th class="py-3 px-4">Status</th>
-                    <th class="py-3 px-4">Severity</th>
-                    <th class="py-3 px-4">Actions</th>
+                <tr>
+                    <th>Job ID</th>
+                    <th>Status</th>
+                    <th>Severity</th>
+                    <th class="text-right">Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for job in jobs %}
-                <tr class="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors {% if loop.index is odd %}bg-slate-800{% else %}bg-slate-800/50{% endif %}">
-                    <td class="py-3 px-4 font-mono text-sm text-gray-300">{{ job.id[:8] }}...</td>
-                    <td class="py-3 px-4">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">{{ job.status }}</span>
-                    </td>
-                    <td class="py-3 px-4">
-                        {# overall_severity is persisted on the job row, with a fallback to the attack graph. The backend emits "extreme" (not "critical") for the top tier. #}
+                <tr>
+                    <td class="font-mono text-xs text-ink-100">{{ job.id[:8] }}&hellip;</td>
+                    <td><span class="badge badge-neutral">{{ job.status }}</span></td>
+                    <td>
                         {% set sev = job.overall_severity or (job.attack_graph_data.overall_severity if job.attack_graph_data else None) %}
                         {% set sev_key = (sev | lower) if sev else None %}
-                        {% set sev_colors = {
-                            "extreme":  "bg-red-500/10 text-red-400 border-red-500/20",
-                            "critical": "bg-red-500/10 text-red-400 border-red-500/20",
-                            "high":     "bg-orange-500/10 text-orange-400 border-orange-500/20",
-                            "medium":   "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
-                            "low":      "bg-green-500/10 text-green-400 border-green-500/20"
+                        {% set sev_badge = {
+                            "extreme":  "badge-red",
+                            "critical": "badge-red",
+                            "high":     "badge-orange",
+                            "medium":   "badge-yellow",
+                            "low":      "badge-green"
                         } %}
-                        {% if sev_key and sev_key in sev_colors %}
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border {{ sev_colors[sev_key] }} capitalize">{{ sev }}</span>
+                        {% if sev_key and sev_key in sev_badge %}
+                        <span class="badge {{ sev_badge[sev_key] }} capitalize">{{ sev }}</span>
                         {% else %}
-                        <span class="text-gray-500 text-sm">N/A</span>
+                        <span class="text-ink-400 text-sm">&mdash;</span>
                         {% endif %}
                     </td>
-                    <td class="py-3 px-4">
-                        <a href="/jobs/{{ job.id }}" class="inline-flex items-center text-sm text-cyan-400 hover:text-cyan-300 transition-colors font-medium">
+                    <td class="text-right">
+                        <a href="/jobs/{{ job.id }}" class="inline-flex items-center gap-1 text-sm link-muted">
                             View
-                            <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                         </a>
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="py-8 text-center text-gray-500 text-sm">No analysis jobs yet.</td>
+                    <td colspan="4">
+                        <div class="py-12 text-center text-sm text-ink-200">No analysis jobs yet.</div>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -155,7 +151,7 @@ if (startScanBtn) {
                 const data = await createResp.json();
                 alert('Could not create job: ' + (data.detail || 'Unknown error'));
                 startScanBtn.disabled = false;
-                startScanBtn.textContent = 'Start New Scan';
+                startScanBtn.textContent = 'Start new scan';
                 return;
             }
             const job = await createResp.json();
@@ -166,7 +162,7 @@ if (startScanBtn) {
                 const data = await startResp.json();
                 alert('Could not start scan: ' + (data.detail || 'Unknown error'));
                 startScanBtn.disabled = false;
-                startScanBtn.textContent = 'Start New Scan';
+                startScanBtn.textContent = 'Start new scan';
                 return;
             }
 
@@ -175,7 +171,7 @@ if (startScanBtn) {
         } catch (err) {
             alert('Error: ' + err.message);
             startScanBtn.disabled = false;
-            startScanBtn.textContent = 'Start New Scan';
+            startScanBtn.textContent = 'Start new scan';
         }
     });
 }

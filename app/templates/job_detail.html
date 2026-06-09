@@ -1,39 +1,43 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="mb-6 flex items-start justify-between flex-wrap gap-4">
-    <div>
-        <h1 class="text-2xl font-bold text-gray-100">Job Detail</h1>
-        <p class="font-mono text-sm text-gray-400 mt-1">ID: {{ job.id }}</p>
-        <p class="text-gray-400 text-sm mt-1">Workspace: <a href="/workspaces/{{ job.workspace_id }}" class="text-cyan-400 hover:text-cyan-300 transition-colors">{{ job.workspace_id }}</a></p>
-    </div>
-    <div class="flex items-center gap-3">
-        {% if job.status in ["pending", "ready"] %}
-        <button id="start-job-btn"
-                class="bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-5 py-2 rounded-lg font-medium hover:shadow-lg hover:shadow-cyan-500/25 transition-all text-sm flex items-center">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            Start Scan
-        </button>
-        {% elif job.status != "complete" %}
-        <span id="live-indicator" class="inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-            <span class="relative flex h-2.5 w-2.5 mr-2">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
+<div class="mb-6">
+    <a href="/workspaces/{{ job.workspace_id }}" class="inline-flex items-center gap-1.5 text-xs link-muted mb-4">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Back to workspace
+    </a>
+    <div class="flex items-start justify-between flex-wrap gap-4">
+        <div>
+            <h1 class="page-title">Scan</h1>
+            <p class="font-mono text-xs text-ink-200 mt-1.5">{{ job.id }}</p>
+        </div>
+        <div class="flex items-center gap-3">
+            {% if job.status in ["pending", "ready"] %}
+            <button id="start-job-btn" class="btn btn-primary btn-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Start scan
+            </button>
+            {% elif job.status != "complete" %}
+            <span id="live-indicator" class="badge badge-neutral">
+                <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                </span>
+                Scanning live
             </span>
-            Scanning live
-        </span>
-        {% else %}
-        <span class="inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium bg-green-500/10 text-green-400 border border-green-500/20">
-            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-            Complete
-        </span>
-        {% endif %}
+            {% else %}
+            <span class="badge badge-green">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Complete
+            </span>
+            {% endif %}
+        </div>
     </div>
 </div>
 
 <!-- FSM State Progress Stepper -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-6">Pipeline Progress</h2>
+<section class="card card-pad mb-6">
+    <h2 class="section-title mb-6">Pipeline progress</h2>
     {% set states = ["ready", "recon", "dast_testing", "poc_verification", "blue_team_remediation", "complete"] %}
     {% set state_labels = {"ready": "Ready", "recon": "Recon", "dast_testing": "DAST", "poc_verification": "PoC Verify", "blue_team_remediation": "Remediation", "complete": "Complete"} %}
     {% set display_phase = job.pipeline_phase if job.pipeline_phase else job.status %}
@@ -45,24 +49,24 @@
             <div class="flex flex-col items-center min-w-[64px]">
                 {% if loop.index0 < current_index %}
                 <!-- Completed -->
-                <div class="w-9 h-9 rounded-full bg-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/30">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                <div class="w-8 h-8 rounded-full bg-white flex items-center justify-center">
+                    <svg class="w-4 h-4 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
                 </div>
                 {% elif loop.index0 == current_index %}
                 <!-- Current -->
-                <div class="w-9 h-9 rounded-full bg-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/50 pulse-glow">
-                    <div class="w-3 h-3 rounded-full bg-white"></div>
+                <div class="w-8 h-8 rounded-full bg-white flex items-center justify-center pulse-ring">
+                    <div class="w-2.5 h-2.5 rounded-full bg-black"></div>
                 </div>
                 {% else %}
                 <!-- Future -->
-                <div class="w-9 h-9 rounded-full border-2 border-slate-600 flex items-center justify-center">
-                    <div class="w-2 h-2 rounded-full bg-slate-600"></div>
+                <div class="w-8 h-8 rounded-full border border-ink-700 flex items-center justify-center">
+                    <div class="w-1.5 h-1.5 rounded-full bg-ink-600"></div>
                 </div>
                 {% endif %}
-                <span class="text-xs mt-2 text-center {% if loop.index0 == current_index %}text-cyan-400 font-medium{% elif loop.index0 < current_index %}text-gray-300{% else %}text-gray-500{% endif %}">{{ state_labels[state] }}</span>
+                <span class="text-[11px] mt-2 text-center {% if loop.index0 == current_index %}text-white font-medium{% elif loop.index0 < current_index %}text-ink-100{% else %}text-ink-400{% endif %}">{{ state_labels[state] }}</span>
             </div>
             {% if not loop.last %}
-            <div class="flex-1 mx-2 h-0.5 {% if loop.index0 < current_index %}bg-cyan-500{% else %}bg-slate-700{% endif %} rounded hidden sm:block"></div>
+            <div class="flex-1 mx-2 h-px {% if loop.index0 < current_index %}bg-white{% else %}bg-ink-800{% endif %} hidden sm:block"></div>
             {% endif %}
         </div>
         {% endfor %}
@@ -73,32 +77,28 @@
 {% set report = job.attack_graph_data.report if job.attack_graph_data else None %}
 {% set severity = job.overall_severity or (job.attack_graph_data.overall_severity if job.attack_graph_data else None) %}
 {% if severity or report %}
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        Report
-    </h2>
-    <div class="flex flex-wrap items-center gap-6">
+<section class="card card-pad mb-6">
+    <h2 class="section-title mb-4">Report</h2>
+    <div class="flex flex-wrap items-center gap-8">
         {% if severity %}
-        {% set sev_colors = {"extreme": "bg-red-500/10 text-red-400 border-red-500/30", "high": "bg-orange-500/10 text-orange-400 border-orange-500/30", "medium": "bg-yellow-500/10 text-yellow-300 border-yellow-500/30", "low": "bg-green-500/10 text-green-400 border-green-500/30"} %}
+        {% set sev_badge = {"extreme": "badge-red", "critical": "badge-red", "high": "badge-orange", "medium": "badge-yellow", "low": "badge-green"} %}
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Overall Severity</span>
-            <div class="mt-1">
-                <span class="inline-flex items-center px-3 py-1 rounded-lg text-sm font-semibold border {{ sev_colors.get(severity, 'bg-slate-700 text-gray-300 border-slate-600') }}">{{ severity | upper }}</span>
+            <span class="eyebrow">Overall severity</span>
+            <div class="mt-1.5">
+                <span class="badge {{ sev_badge.get(severity, 'badge-neutral') }}">{{ severity | upper }}</span>
             </div>
         </div>
         {% endif %}
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Vulnerability Report</span>
-            <div class="mt-1">
+            <span class="eyebrow">Vulnerability report</span>
+            <div class="mt-1.5">
                 {% if report and report.status == "failed" %}
-                <span class="inline-flex items-center px-3 py-1 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30">Generation failed</span>
-                <p class="text-xs text-gray-400 mt-1.5">{{ report.reason }}</p>
+                <span class="badge badge-red">Generation failed</span>
+                <p class="text-xs text-ink-300 mt-1.5">{{ report.reason }}</p>
                 {% else %}
-                <a href="/api/jobs/{{ job.id }}/report"
-                   class="inline-flex items-center bg-gradient-to-r from-cyan-500 to-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:shadow-lg hover:shadow-cyan-500/25 transition-all text-sm">
-                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    Download PDF Report
+                <a href="/api/jobs/{{ job.id }}/report" class="btn btn-primary btn-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                    Download PDF report
                 </a>
                 {% endif %}
             </div>
@@ -111,107 +111,107 @@
 {% set assessment = job.attack_graph_data.final_assessment if job.attack_graph_data else None %}
 {% if assessment %}
 {% set risk = (assessment.overall_risk or 'Informational') | lower %}
-{% set risk_colors = {
-    'critical': 'bg-red-500/10 text-red-400 border-red-500/30',
-    'high':     'bg-orange-500/10 text-orange-400 border-orange-500/30',
-    'medium':   'bg-yellow-500/10 text-yellow-300 border-yellow-500/30',
-    'low':      'bg-green-500/10 text-green-400 border-green-500/30',
-    'informational': 'bg-slate-600/20 text-gray-300 border-slate-600'
+{% set risk_badge = {
+    'critical': 'badge-red',
+    'high':     'badge-orange',
+    'medium':   'badge-yellow',
+    'low':      'badge-green',
+    'informational': 'badge-neutral'
 } %}
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-        K2-Think-v2 Security Assessment
+<section class="card card-pad mb-6">
+    <h2 class="section-title mb-4 flex items-center gap-2">
+        <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+        K2-Think-v2 security assessment
     </h2>
-    <div class="flex flex-wrap items-center gap-6 mb-4">
+    <div class="grid grid-cols-2 sm:flex sm:flex-wrap gap-8 mb-5">
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Vulnerabilities Identified</span>
-            <div class="mt-1 text-2xl font-bold text-gray-100">{{ assessment.total_vulnerabilities if assessment.total_vulnerabilities is not none else 'n/a' }}</div>
+            <span class="eyebrow">Vulnerabilities</span>
+            <div class="mt-1 text-2xl font-semibold text-white tracking-tight">{{ assessment.total_vulnerabilities if assessment.total_vulnerabilities is not none else 'n/a' }}</div>
         </div>
         <div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Overall Risk</span>
-            <div class="mt-1">
-                <span class="inline-flex items-center px-3 py-1 rounded-lg text-sm font-semibold border {{ risk_colors.get(risk, 'bg-slate-700 text-gray-300 border-slate-600') }}">{{ (assessment.overall_risk or 'Informational') | upper }}</span>
+            <span class="eyebrow">Overall risk</span>
+            <div class="mt-1.5">
+                <span class="badge {{ risk_badge.get(risk, 'badge-neutral') }}">{{ (assessment.overall_risk or 'Informational') | upper }}</span>
             </div>
         </div>
     </div>
     {% if assessment.executive_summary %}
-    <p class="text-sm text-gray-300 leading-relaxed mb-4">{{ assessment.executive_summary }}</p>
+    <p class="text-sm text-ink-100 leading-relaxed mb-5">{{ assessment.executive_summary }}</p>
     {% endif %}
     {% if assessment.vulnerabilities %}
-    <div class="overflow-x-auto">
-        <table class="w-full text-left">
+    <div class="overflow-x-auto surface-inset">
+        <table class="tw-table">
             <thead>
-                <tr class="border-b border-slate-700 text-gray-400 text-xs uppercase tracking-wider">
-                    <th class="py-2 px-3">Vulnerability</th>
-                    <th class="py-2 px-3">Endpoint</th>
-                    <th class="py-2 px-3">Severity</th>
-                    <th class="py-2 px-3">CVSS</th>
-                    <th class="py-2 px-3">Confidence</th>
+                <tr>
+                    <th>Vulnerability</th>
+                    <th>Endpoint</th>
+                    <th>Severity</th>
+                    <th>CVSS</th>
+                    <th>Confidence</th>
                 </tr>
             </thead>
             <tbody>
                 {% for v in assessment.vulnerabilities %}
                 {% set vsev = (v.severity or 'low') | lower %}
-                <tr class="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors align-top">
-                    <td class="py-3 px-3">
-                        <div class="text-sm font-medium text-gray-100">{{ v.name or v.category or 'Finding' }}</div>
-                        {% if v.category and v.name %}<div class="text-xs text-gray-500 mt-0.5">{{ v.category }}</div>{% endif %}
-                        {% if v.impact %}<div class="text-xs text-gray-400 mt-1">{{ v.impact }}</div>{% endif %}
+                <tr class="align-top">
+                    <td>
+                        <div class="text-sm font-medium text-white">{{ v.name or v.category or 'Finding' }}</div>
+                        {% if v.category and v.name %}<div class="text-xs text-ink-300 mt-0.5">{{ v.category }}</div>{% endif %}
+                        {% if v.impact %}<div class="text-xs text-ink-200 mt-1">{{ v.impact }}</div>{% endif %}
                     </td>
-                    <td class="py-3 px-3 text-sm text-gray-300 font-mono">{{ v.endpoint or '-' }}</td>
-                    <td class="py-3 px-3">
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border {{ risk_colors.get(vsev, 'bg-slate-700 text-gray-300 border-slate-600') }}">{{ (v.severity or 'n/a') | upper }}</span>
-                    </td>
-                    <td class="py-3 px-3 text-sm text-gray-300">{{ v.cvss if v.cvss is not none else '-' }}</td>
-                    <td class="py-3 px-3 text-sm text-gray-300">{{ v.confidence or '-' }}</td>
+                    <td class="text-sm text-ink-100 font-mono">{{ v.endpoint or '-' }}</td>
+                    <td><span class="badge {{ risk_badge.get(vsev, 'badge-neutral') }}">{{ (v.severity or 'n/a') | upper }}</span></td>
+                    <td class="text-sm text-ink-100">{{ v.cvss if v.cvss is not none else '-' }}</td>
+                    <td class="text-sm text-ink-100">{{ v.confidence or '-' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% endif %}
-    <p class="text-xs text-gray-500 mt-4 italic">Assessment generated by K2-Think-v2 from the evidence gathered during this scan.</p>
+    <p class="text-xs text-ink-400 mt-4">Assessment generated by K2-Think-v2 from evidence gathered during this scan.</p>
 </section>
 {% endif %}
 
 <!-- Attack Graph (Canvas Node Graph) -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        Attack Graph
-        <span id="graphLiveTag" class="ml-3 {% if job.status == 'complete' %}hidden{% endif %} inline-flex items-center gap-1.5 text-xs text-cyan-400 font-normal">
-            <span class="relative flex h-2 w-2"><span class="animate-ping absolute h-full w-full rounded-full bg-cyan-400 opacity-75"></span><span class="relative rounded-full h-2 w-2 bg-cyan-500"></span></span>Live
+<section class="card card-pad mb-6">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 class="section-title flex items-center gap-2">
+            <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Attack graph
+        </h2>
+        <span id="graphLiveTag" class="{% if job.status == 'complete' %}hidden{% endif %} badge badge-neutral">
+            <span class="relative flex h-2 w-2"><span class="animate-ping absolute h-full w-full rounded-full bg-white opacity-60"></span><span class="relative rounded-full h-2 w-2 bg-white"></span></span>Live
         </span>
-    </h2>
+    </div>
 
     {% set tool_results = job.attack_graph_data.tool_results if job.attack_graph_data and job.attack_graph_data.tool_results else [] %}
     {% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data and job.attack_graph_data.token_usage else None %}
 
     {% if token_usage %}
-    <div class="flex flex-wrap items-center gap-5 mb-4 pb-4 border-b border-slate-700/60">
-        <div class="flex items-center gap-2"><svg class="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg><span class="text-xs text-gray-400 uppercase tracking-wider">Tokens</span><span class="text-sm font-bold text-gray-100" id="statTotal">{{ "{:,}".format(token_usage.total_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Prompt:</span><span class="text-sm text-gray-300" id="statPrompt">{{ "{:,}".format(token_usage.prompt_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Completion:</span><span class="text-sm text-gray-300" id="statComp">{{ "{:,}".format(token_usage.completion_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">LLM Calls:</span><span class="text-sm text-gray-300" id="statCalls">{{ token_usage.llm_calls or 0 }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Steps:</span><span class="text-sm text-gray-300" id="statIter">{{ tool_results | length }}</span></div>
+    <div class="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-x-8 gap-y-3 mb-4 pb-4 border-b border-white/10">
+        <div><div class="eyebrow">Tokens</div><div class="text-sm font-semibold text-white mt-0.5" id="statTotal">{{ "{:,}".format(token_usage.total_tokens or 0) }}</div></div>
+        <div><div class="eyebrow">Prompt</div><div class="text-sm text-ink-100 mt-0.5" id="statPrompt">{{ "{:,}".format(token_usage.prompt_tokens or 0) }}</div></div>
+        <div><div class="eyebrow">Completion</div><div class="text-sm text-ink-100 mt-0.5" id="statComp">{{ "{:,}".format(token_usage.completion_tokens or 0) }}</div></div>
+        <div><div class="eyebrow">LLM calls</div><div class="text-sm text-ink-100 mt-0.5" id="statCalls">{{ token_usage.llm_calls or 0 }}</div></div>
+        <div><div class="eyebrow">Steps</div><div class="text-sm text-ink-100 mt-0.5" id="statIter">{{ tool_results | length }}</div></div>
     </div>
     {% endif %}
 
-    <div class="relative rounded-lg border border-slate-700 bg-slate-900/80 overflow-hidden" style="height:600px;" id="graphWrap">
+    <div class="relative rounded-xl border border-white/10 bg-black overflow-hidden" style="height:600px;" id="graphWrap">
         <canvas id="attackGraphCanvas" style="width:100%;height:100%;cursor:grab;"></canvas>
-        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-sm px-4 py-3 rounded-lg bg-slate-700/95 border border-slate-500 shadow-2xl text-xs text-gray-200 leading-relaxed backdrop-blur-sm"></div>
+        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-sm px-4 py-3 rounded-lg bg-ink-950/95 border border-white/15 shadow-2xl text-xs text-ink-100 leading-relaxed backdrop-blur-sm"></div>
         <div class="absolute bottom-3 right-3 flex gap-1.5 z-20">
-            <button onclick="graphZoom(1.3)" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-base font-bold">+</button>
-            <button onclick="graphZoom(0.7)" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-base font-bold">&minus;</button>
-            <button onclick="graphReset()" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-xs font-bold">&#x21BA;</button>
+            <button onclick="graphZoom(1.3)" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-base font-medium transition-colors">+</button>
+            <button onclick="graphZoom(0.7)" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-base font-medium transition-colors">&minus;</button>
+            <button onclick="graphReset()" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-xs transition-colors">&#x21BA;</button>
         </div>
-        <div class="absolute top-3 left-3 flex gap-4 text-[10px] text-gray-400 z-20">
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-cyan-500/80"></span>Recon</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-blue-500/80"></span>Scanning</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-red-500/80"></span>Finding</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-amber-500/80"></span>PoC</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-green-500/80"></span>Patch</span>
+        <div class="absolute top-3 left-3 flex flex-wrap gap-x-3 gap-y-1.5 text-[10px] text-ink-200 z-20 pr-16">
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#22d3ee"></span>Recon</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#3b82f6"></span>Scanning</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#f87171"></span>Finding</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#fbbf24"></span>PoC</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#4ade80"></span>Patch</span>
         </div>
     </div>
 
@@ -224,7 +224,10 @@
     const tooltip=document.getElementById('graphTooltip');
     let scale=1,offsetX=30,offsetY=0,dragging=false,lastMouse={x:0,y:0};
     const dpr=window.devicePixelRatio||1;
-    const C={recon:{bg:'#0c4a6e',border:'#22d3ee',title:'#67e8f9',text:'#a5f3fc',dim:'#64748b'},scan:{bg:'#172554',border:'#3b82f6',title:'#93c5fd',text:'#bfdbfe',dim:'#64748b'},finding:{bg:'#450a0a',border:'#f87171',title:'#fca5a5',text:'#fecaca',dim:'#a8a29e'},verify:{bg:'#451a03',border:'#fbbf24',title:'#fde68a',text:'#fef3c7',dim:'#a8a29e'},patch:{bg:'#052e16',border:'#4ade80',title:'#bbf7d0',text:'#dcfce7',dim:'#64748b'}};
+    // Vercel-style: dark surfaces, white titles, muted body, single accent per type.
+    const NODE_BG='#0a0a0a', NODE_BG2='#0e0e0e', NODE_BORDER='rgba(255,255,255,0.10)';
+    const TITLE='#fafafa', BODY='#bdbdbd', DIM='#7a7a7a';
+    const ACCENT={recon:'#22d3ee',scan:'#3b82f6',finding:'#f87171',verify:'#fbbf24',patch:'#4ade80'};
 
     function buildSteps(entries){
         const steps=[];let reconSvc=[],reconCVE=[],probes={},findings=[],pocs=[],patches=[];
@@ -250,27 +253,27 @@
         return steps;
     }
 
-    const NW=280,NH=130,GAP_X=100,GAP_Y=24;
+    const NW=280,NH=130,GAP_X=110,GAP_Y=26;
     function layoutNodes(steps){
         const nodes=[];let x=40,i=0;
         while(i<steps.length){
             if(steps[i].type==='finding'){
                 const group=[];while(i<steps.length&&steps[i].type==='finding'){group.push(steps[i]);i++;}
                 const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
-                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.finding});
+                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi]});
                 x+=NW+GAP_X;
             }else if(steps[i].type==='verify'){
                 const group=[];while(i<steps.length&&steps[i].type==='verify'){group.push(steps[i]);i++;}
                 const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
-                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.verify});
+                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi]});
                 x+=NW+GAP_X;
             }else if(steps[i].type==='patch'){
                 const group=[];while(i<steps.length&&steps[i].type==='patch'){group.push(steps[i]);i++;}
                 const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
-                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.patch});
+                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi]});
                 x+=NW+GAP_X;
             }else{
-                nodes.push({x,y:300-NH/2,w:NW,h:NH,step:steps[i],color:C[steps[i].type]||C.scan});
+                nodes.push({x,y:300-NH/2,w:NW,h:NH,step:steps[i]});
                 x+=NW+GAP_X;i++;
             }
         }return nodes;
@@ -287,43 +290,99 @@
 
     function clipText(text,maxW){if(!text)return'';if(ctx.measureText(text).width<=maxW)return text;let t=text;while(t.length>0&&ctx.measureText(t+'\u2026').width>maxW)t=t.slice(0,-1);return t+'\u2026';}
 
-    function resize(){const rect=canvas.parentElement.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;canvas.style.width=rect.width+'px';canvas.style.height=rect.height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);draw();}
+    function resize(){const rect=canvas.parentElement.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;canvas.style.width=rect.width+'px';canvas.style.height=rect.height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);}
+
+    let flow=0;
+    function drawGrid(w,h){
+        // dotted grid in world space, panning with the content
+        const step=28;
+        const wx0=(0-offsetX)/scale, wy0=(0-offsetY)/scale;
+        const wx1=(w-offsetX)/scale, wy1=(h-offsetY)/scale;
+        const startX=Math.floor(wx0/step)*step, startY=Math.floor(wy0/step)*step;
+        ctx.fillStyle='rgba(255,255,255,0.05)';
+        const r=Math.max(0.6,1/scale*0.8);
+        for(let gx=startX;gx<wx1;gx+=step){for(let gy=startY;gy<wy1;gy+=step){ctx.beginPath();ctx.arc(gx,gy,r,0,Math.PI*2);ctx.fill();}}
+    }
 
     function draw(){
         const w=canvas.width/dpr,h=canvas.height/dpr;
         ctx.save();ctx.clearRect(0,0,w,h);ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
-        for(const[a,b]of edges){const ax=a.x+a.w,ay=a.y+a.h/2,bx=b.x,by=b.y+b.h/2;ctx.beginPath();ctx.moveTo(ax,ay);const mx=(ax+bx)/2;ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.strokeStyle='#334155';ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-10,by-5);ctx.lineTo(bx-10,by+5);ctx.closePath();ctx.fillStyle='#475569';ctx.fill();}
-        for(const n of nodes){const c=n.color;ctx.save();ctx.shadowColor=c.border+'30';ctx.shadowBlur=20;ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,14);ctx.fillStyle=c.bg;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=c.border;ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,14);ctx.clip();const pad=14,textW=n.w-pad*2;ctx.font='700 13px -apple-system,BlinkMacSystemFont,sans-serif';ctx.fillStyle=c.title;ctx.textBaseline='top';ctx.fillText(clipText(n.step.title,textW),n.x+pad,n.y+pad);ctx.font='400 11px ui-monospace,monospace';const lineH=17;let ly=n.y+pad+22;const maxLines=Math.floor((n.h-pad*2-24)/lineH);for(let li=0;li<Math.min(n.step.lines.length,maxLines);li++){ctx.fillStyle=li===0?c.text:c.dim;ctx.fillText(clipText(n.step.lines[li],textW),n.x+pad,ly);ly+=lineH;}if(n.step.lines.length>maxLines){ctx.fillStyle=c.dim;ctx.fillText('+'+(n.step.lines.length-maxLines)+' more\u2026',n.x+pad,ly);}ctx.restore();}
+        drawGrid(w,h);
+        // edges — faint base line + animated flowing dash
+        for(const[a,b]of edges){
+            const ax=a.x+a.w,ay=a.y+a.h/2,bx=b.x,by=b.y+b.h/2,mx=(ax+bx)/2;
+            ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);
+            ctx.setLineDash([]);ctx.strokeStyle='rgba(255,255,255,0.10)';ctx.lineWidth=1.25;ctx.stroke();
+            ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);
+            ctx.setLineDash([2,10]);ctx.lineDashOffset=-flow;ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=1.5;ctx.stroke();
+            ctx.setLineDash([]);
+            // arrow head
+            ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-8,by-4);ctx.lineTo(bx-8,by+4);ctx.closePath();ctx.fillStyle='rgba(255,255,255,0.30)';ctx.fill();
+        }
+        // nodes
+        for(const n of nodes){
+            const acc=ACCENT[n.step.type]||'#3b82f6';
+            ctx.save();
+            // soft drop shadow for depth
+            ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=18;ctx.shadowOffsetY=6;
+            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,12);
+            const g=ctx.createLinearGradient(n.x,n.y,n.x,n.y+n.h);g.addColorStop(0,NODE_BG2);g.addColorStop(1,NODE_BG);
+            ctx.fillStyle=g;ctx.fill();
+            ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
+            ctx.strokeStyle=NODE_BORDER;ctx.lineWidth=1;ctx.stroke();
+            // clip content
+            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,12);ctx.clip();
+            // left accent bar
+            ctx.fillStyle=acc;ctx.fillRect(n.x,n.y,3,n.h);
+            // accent glow strip
+            const gg=ctx.createLinearGradient(n.x,n.y,n.x+60,n.y);gg.addColorStop(0,acc+'22');gg.addColorStop(1,'transparent');
+            ctx.fillStyle=gg;ctx.fillRect(n.x,n.y,60,n.h);
+            const pad=16,textW=n.w-pad-12;
+            // accent dot + title
+            ctx.beginPath();ctx.arc(n.x+pad+3,n.y+pad+5,3.5,0,Math.PI*2);ctx.fillStyle=acc;ctx.fill();
+            ctx.font='600 13px Geist,-apple-system,BlinkMacSystemFont,sans-serif';ctx.fillStyle=TITLE;ctx.textBaseline='middle';
+            ctx.fillText(clipText(n.step.title,textW-16),n.x+pad+14,n.y+pad+5);
+            // body lines
+            ctx.textBaseline='top';ctx.font='400 11px "Geist Mono",ui-monospace,monospace';
+            const lineH=17;let ly=n.y+pad+24;const maxLines=Math.floor((n.h-pad-26)/lineH);
+            for(let li=0;li<Math.min(n.step.lines.length,maxLines);li++){ctx.fillStyle=li===0?BODY:DIM;ctx.fillText(clipText(n.step.lines[li],textW),n.x+pad,ly);ly+=lineH;}
+            if(n.step.lines.length>maxLines){ctx.fillStyle=DIM;ctx.fillText('+'+(n.step.lines.length-maxLines)+' more\u2026',n.x+pad,ly);}
+            ctx.restore();
+        }
         ctx.restore();
     }
 
     canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
-    canvas.addEventListener('mousemove',e=>{if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};draw();return;}const rect=canvas.getBoundingClientRect();const mx=(e.clientX-rect.left-offsetX)/scale,my=(e.clientY-rect.top-offsetY)/scale;let hit=null;for(const n of nodes){if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h){hit=n;break;}}if(hit){tooltip.innerHTML='<div class="font-semibold text-gray-100 mb-1">'+hit.step.title.replace(/</g,'&lt;')+'</div><div class="text-gray-300 space-y-0.5">'+hit.step.lines.map(l=>'<div>'+l.replace(/</g,'&lt;')+'</div>').join('')+'</div>';tooltip.style.left=(e.clientX-rect.left+16)+'px';tooltip.style.top=(e.clientY-rect.top-8)+'px';tooltip.classList.remove('hidden');canvas.style.cursor='pointer';}else{tooltip.classList.add('hidden');canvas.style.cursor='grab';}});
+    canvas.addEventListener('mousemove',e=>{if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};return;}const rect=canvas.getBoundingClientRect();const mx=(e.clientX-rect.left-offsetX)/scale,my=(e.clientY-rect.top-offsetY)/scale;let hit=null;for(const n of nodes){if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h){hit=n;break;}}if(hit){tooltip.innerHTML='<div class="font-semibold text-white mb-1">'+hit.step.title.replace(/</g,'&lt;')+'</div><div class="text-ink-200 space-y-0.5">'+hit.step.lines.map(l=>'<div>'+l.replace(/</g,'&lt;')+'</div>').join('')+'</div>';tooltip.style.left=(e.clientX-rect.left+16)+'px';tooltip.style.top=(e.clientY-rect.top-8)+'px';tooltip.classList.remove('hidden');canvas.style.cursor='pointer';}else{tooltip.classList.add('hidden');canvas.style.cursor='grab';}});
     canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
     canvas.addEventListener('mouseleave',()=>{dragging=false;tooltip.classList.add('hidden');});
-    canvas.addEventListener('wheel',e=>{e.preventDefault();const z=e.deltaY<0?1.12:0.88;scale*=z;scale=Math.max(0.2,Math.min(5,scale));draw();},{passive:false});
-    window.graphZoom=f=>{scale*=f;scale=Math.max(0.2,Math.min(5,scale));draw();};
-    window.graphReset=()=>{scale=1;const rect=canvas.parentElement.getBoundingClientRect();offsetX=30;offsetY=rect.height/2-300;draw();};
-    window.addEventListener('resize',resize);resize();
+    canvas.addEventListener('wheel',e=>{e.preventDefault();const z=e.deltaY<0?1.12:0.88;scale*=z;scale=Math.max(0.2,Math.min(5,scale));},{passive:false});
+    window.graphZoom=f=>{scale*=f;scale=Math.max(0.2,Math.min(5,scale));};
+    window.graphReset=()=>{scale=1;const rect=canvas.parentElement.getBoundingClientRect();offsetX=30;offsetY=rect.height/2-300;};
+    window.addEventListener('resize',resize);resize();offsetY=canvas.parentElement.getBoundingClientRect().height/2-300;
 
-    // Real-time polling: update graph live, only full reload on complete
+    // single animation loop drives flowing edges + all rendering
+    function loop(){flow=(flow+0.45)%12;draw();requestAnimationFrame(loop);}
+    loop();
+
+    // Real-time polling: refresh data live, full reload on complete
     if(JOB_STATUS!=='complete'&&JOB_STATUS!=='pending'){
-        const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};const nr=ag.tool_results||[];if(nr.length!==raw.length){raw=nr;rebuild();draw();}const tu=ag.token_usage;if(tu){const fmt=n=>(n||0).toLocaleString();const el=id=>document.getElementById(id);if(el('statTotal'))el('statTotal').textContent=fmt(tu.total_tokens);if(el('statPrompt'))el('statPrompt').textContent=fmt(tu.prompt_tokens);if(el('statComp'))el('statComp').textContent=fmt(tu.completion_tokens);if(el('statCalls'))el('statCalls').textContent=tu.llm_calls||0;if(el('statIter'))el('statIter').textContent=nr.length;}if(job.status==='complete'){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');setTimeout(()=>window.location.reload(),1500);}}catch(e){}},3000);
+        const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};const nr=ag.tool_results||[];if(nr.length!==raw.length){raw=nr;rebuild();}const tu=ag.token_usage;if(tu){const fmt=n=>(n||0).toLocaleString();const el=id=>document.getElementById(id);if(el('statTotal'))el('statTotal').textContent=fmt(tu.total_tokens);if(el('statPrompt'))el('statPrompt').textContent=fmt(tu.prompt_tokens);if(el('statComp'))el('statComp').textContent=fmt(tu.completion_tokens);if(el('statCalls'))el('statCalls').textContent=tu.llm_calls||0;if(el('statIter'))el('statIter').textContent=nr.length;}if(job.status==='complete'){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');setTimeout(()=>window.location.reload(),1500);}}catch(e){}},3000);
     }
     })();
     </script>
 
-    {% if not tool_results %}<p class="text-gray-500 text-sm mt-4">Graph will populate in real-time once the scan starts.</p>{% endif %}
+    {% if not tool_results %}<p class="text-ink-300 text-sm mt-4">Graph will populate in real-time once the scan starts.</p>{% endif %}
 
     {% if job.attack_graph_data %}
-    <details class="mt-4 group"><summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-gray-400 hover:text-gray-300 transition-colors"><svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>View Raw JSON</summary><div class="mt-3"><pre class="code-block bg-slate-900 border border-slate-700 p-4 rounded-lg overflow-x-auto text-sm max-h-96"><code class="text-green-300">{{ job.attack_graph_data | tojson(indent=2) }}</code></pre></div></details>
+    <details class="mt-4 group"><summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-ink-200 hover:text-white transition-colors"><svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>View raw JSON</summary><div class="mt-3"><pre class="code-block surface-inset p-4 overflow-x-auto text-sm max-h-96"><code>{{ job.attack_graph_data | tojson(indent=2) }}</code></pre></div></details>
     {% endif %}
 </section>
 
 <!-- Mitigations -->
-<section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6">
-    <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
-        <svg class="w-5 h-5 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+<section class="card card-pad">
+    <h2 class="section-title mb-4 flex items-center gap-2">
+        <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
         Mitigations
     </h2>
     {% if mitigations %}
@@ -331,61 +390,55 @@
         {% for m in mitigations %}
         {% set meta = m.finding_metadata or {} %}
         {% set risk = (meta.risk_level or 'High') | lower %}
-        {% set risk_colors = {
-            'critical': 'bg-red-500/10 text-red-400 border-red-500/30',
-            'high':     'bg-orange-500/10 text-orange-400 border-orange-500/30',
-            'medium':   'bg-yellow-500/10 text-yellow-300 border-yellow-500/30',
-            'low':      'bg-green-500/10 text-green-400 border-green-500/30'
+        {% set risk_badge = {
+            'critical': 'badge-red',
+            'high':     'badge-orange',
+            'medium':   'badge-yellow',
+            'low':      'badge-green'
         } %}
-        <div class="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
+        <div class="surface-inset overflow-hidden">
             <!-- Finding header -->
-            <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700/60">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-white/10">
                 <div class="flex items-center gap-3 min-w-0">
-                    <svg class="w-4 h-4 text-orange-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
-                    <span class="font-semibold text-gray-100 truncate">{{ m.vulnerability_node }}</span>
+                    <svg class="w-4 h-4 flex-shrink-0" style="color:#fb923c" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+                    <span class="font-semibold text-white truncate">{{ m.vulnerability_node }}</span>
                 </div>
-                <span class="ml-4 flex-shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full border {{ risk_colors.get(risk, 'bg-slate-700 text-gray-300 border-slate-600') }}">
-                    {{ (meta.risk_level or 'High') | upper }}
-                </span>
+                <span class="badge {{ risk_badge.get(risk, 'badge-neutral') }} ml-4 flex-shrink-0">{{ (meta.risk_level or 'High') | upper }}</span>
             </div>
 
             <div class="px-5 py-4 space-y-4">
-                <!-- Description -->
                 {% if meta.description %}
                 <div>
-                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">What is this issue?</p>
-                    <p class="text-sm text-gray-300 leading-relaxed">{{ meta.description }}</p>
+                    <p class="eyebrow mb-1">What is this issue?</p>
+                    <p class="text-sm text-ink-100 leading-relaxed">{{ meta.description }}</p>
                 </div>
                 {% endif %}
 
-                <!-- CVEs -->
                 {% if meta.cves %}
                 <div>
-                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">CVE References</p>
+                    <p class="eyebrow mb-1.5">CVE references</p>
                     <div class="flex flex-wrap gap-2">
                         {% for cve in meta.cves %}
-                        <span class="inline-flex items-center text-xs font-mono px-2.5 py-1 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">{{ cve }}</span>
+                        <span class="badge badge-red badge-mono">{{ cve }}</span>
                         {% endfor %}
                     </div>
                 </div>
                 {% endif %}
 
-                <!-- Recommendation -->
                 {% if meta.recommendation %}
                 <div>
-                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Recommended Fix</p>
-                    <p class="text-sm text-gray-300 leading-relaxed">{{ meta.recommendation }}</p>
+                    <p class="eyebrow mb-1">Recommended fix</p>
+                    <p class="text-sm text-ink-100 leading-relaxed">{{ meta.recommendation }}</p>
                 </div>
                 {% endif %}
 
-                <!-- Patched Code -->
                 <details class="group">
-                    <summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-cyan-400 hover:text-cyan-300 transition-colors">
+                    <summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-ink-200 hover:text-white transition-colors">
                         <svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                        View Patched Code
+                        View patched code
                     </summary>
                     <div class="mt-3">
-                        <pre class="code-block bg-slate-950 border border-slate-700 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed"><code class="text-green-300">{{ m.remediation_code or "No remediation code available" }}</code></pre>
+                        <pre class="code-block bg-black border border-white/10 rounded-lg p-4 overflow-x-auto text-sm leading-relaxed"><code>{{ m.remediation_code or "No remediation code available" }}</code></pre>
                     </div>
                 </details>
             </div>
@@ -393,7 +446,7 @@
         {% endfor %}
     </div>
     {% else %}
-    <p class="text-gray-500 text-sm">No mitigations generated yet</p>
+    <p class="text-ink-300 text-sm">No mitigations generated yet.</p>
     {% endif %}
 </section>
 
@@ -407,8 +460,8 @@ if (startJobBtn) {
         try {
             const resp = await fetch('/api/jobs/{{ job.id }}/start', {method: 'POST'});
             if (resp.ok) { window.location.reload(); }
-            else { const data = await resp.json(); alert('Could not start scan: ' + (data.detail || 'Unknown error')); startJobBtn.disabled = false; startJobBtn.textContent = 'Start Scan'; }
-        } catch (err) { alert('Error: ' + err.message); startJobBtn.disabled = false; startJobBtn.textContent = 'Start Scan'; }
+            else { const data = await resp.json(); alert('Could not start scan: ' + (data.detail || 'Unknown error')); startJobBtn.disabled = false; startJobBtn.textContent = 'Start scan'; }
+        } catch (err) { alert('Error: ' + err.message); startJobBtn.disabled = false; startJobBtn.textContent = 'Start scan'; }
     });
 }
 </script>
