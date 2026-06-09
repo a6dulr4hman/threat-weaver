@@ -175,7 +175,7 @@
 </section>
 {% endif %}
 
-<!-- Attack Graph (Visual Node Graph) -->
+<!-- Attack Graph (Canvas Node Graph) -->
 <section class="bg-slate-800 border border-slate-700 rounded-xl shadow-lg shadow-slate-950/50 p-6 mb-6">
     <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
         <svg class="w-5 h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
@@ -184,9 +184,9 @@
 
     {% if job.attack_graph_data and job.attack_graph_data.tool_results %}
     {% set tool_results = job.attack_graph_data.tool_results %}
+    {% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data.token_usage else None %}
 
     <!-- Token Usage Stats -->
-    {% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data.token_usage else None %}
     {% if token_usage %}
     <div class="flex flex-wrap items-center gap-5 mb-5 pb-4 border-b border-slate-700/60">
         <div class="flex items-center gap-2">
@@ -194,173 +194,217 @@
             <span class="text-xs text-gray-400 uppercase tracking-wider">Total Tokens</span>
             <span class="text-sm font-bold text-gray-100">{{ "{:,}".format(token_usage.total_tokens or 0) }}</span>
         </div>
-        <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-400">Prompt:</span>
-            <span class="text-sm text-gray-300">{{ "{:,}".format(token_usage.prompt_tokens or 0) }}</span>
-        </div>
-        <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-400">Completion:</span>
-            <span class="text-sm text-gray-300">{{ "{:,}".format(token_usage.completion_tokens or 0) }}</span>
-        </div>
-        <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-400">LLM Calls:</span>
-            <span class="text-sm text-gray-300">{{ token_usage.llm_calls or 0 }}</span>
-        </div>
-        <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-400">Iterations:</span>
-            <span class="text-sm text-gray-300">{{ tool_results | length }}</span>
-        </div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Prompt:</span><span class="text-sm text-gray-300">{{ "{:,}".format(token_usage.prompt_tokens or 0) }}</span></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Completion:</span><span class="text-sm text-gray-300">{{ "{:,}".format(token_usage.completion_tokens or 0) }}</span></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">LLM Calls:</span><span class="text-sm text-gray-300">{{ token_usage.llm_calls or 0 }}</span></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Iterations:</span><span class="text-sm text-gray-300">{{ tool_results | length }}</span></div>
     </div>
     {% endif %}
 
-    <!-- Visual Node Graph -->
-    <div class="relative overflow-x-auto pb-4">
-        <div class="flex flex-col gap-0 min-w-[600px]">
-            {% set ns = namespace(phase='recon', vuln_count=0) %}
-            {% for entry in tool_results %}
-            {% set tool = entry.tool %}
-            {% set result = entry.result or {} %}
-            {% set args = entry.arguments or {} %}
-            {% set iteration = entry.iteration if entry.iteration is defined else loop.index0 %}
-
-            {# Determine node type and color #}
-            {% if tool == 'run_nmap' %}
-                {% set node_color = 'cyan' %}
-                {% set node_icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>' %}
-                {% set node_label = 'Nmap Scan' %}
-                {% set node_detail = (args.target or '') ~ ':' ~ (args.port_range or '1-1024') %}
-                {% set node_phase = 'recon' %}
-            {% elif tool == 'query_hackclub' %}
-                {% set node_color = 'violet' %}
-                {% set node_icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>' %}
-                {% set node_label = 'CVE Lookup' %}
-                {% set node_detail = (args.component or '') ~ ' ' ~ (args.version or '') %}
-                {% set node_phase = 'recon' %}
-            {% elif tool == 'send_http_request' %}
-                {% set node_color = 'blue' %}
-                {% set node_icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>' %}
-                {% set node_label = (args.method or 'GET') ~ ' ' ~ (args.endpoint or '' | replace('http://threat.falak.me', '') | truncate(30)) %}
-                {% set endpoint_path = (args.endpoint or '').replace('http://', '').split('/', 1) %}
-                {% set node_detail = '/' ~ endpoint_path[1] if endpoint_path | length > 1 else '/' %}
-                {% set node_phase = 'dast' %}
-                {# Check if this was an anomaly #}
-                {% if result.is_server_error or result.stack_trace_detected or result.server_crash_suspected %}
-                    {% set node_color = 'red' %}
-                {% elif result.status_code == 200 and ('root:x:0:0:' in (result.body or '') or 'uid=0(root)' in (result.body or '')) %}
-                    {% set node_color = 'red' %}
-                {% endif %}
-            {% elif tool == 'execute_safe_poc' %}
-                {% set node_color = 'amber' %}
-                {% set node_icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>' %}
-                {% set node_label = 'PoC Verify' %}
-                {% set node_detail = args.sandbox_id or 'sandbox' %}
-                {% set node_phase = 'poc' %}
-                {% if result.exploit_confirmed %}
-                    {% set node_color = 'red' %}
-                {% endif %}
-            {% elif tool == 'generate_patch' %}
-                {% set ns.vuln_count = ns.vuln_count + 1 %}
-                {% set node_color = 'green' %}
-                {% set node_icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>' %}
-                {% set node_label = 'Patch #' ~ ns.vuln_count %}
-                {% set node_detail = args.vuln_node or 'fix' %}
-                {% set node_phase = 'remediation' %}
-            {% elif tool == 'run_fuzzer' %}
-                {% set node_color = 'orange' %}
-                {% set node_icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>' %}
-                {% set node_label = 'Fuzzer' %}
-                {% set node_detail = args.url or '' %}
-                {% set node_phase = 'dast' %}
-            {% else %}
-                {% set node_color = 'gray' %}
-                {% set node_icon = '<circle cx="12" cy="12" r="3"/>' %}
-                {% set node_label = tool %}
-                {% set node_detail = '' %}
-                {% set node_phase = 'unknown' %}
-            {% endif %}
-
-            {# Color classes #}
-            {% set color_map = {
-                'cyan': {'bg': 'bg-cyan-500/15', 'border': 'border-cyan-500/40', 'text': 'text-cyan-400', 'icon_bg': 'bg-cyan-500/20', 'line': 'bg-cyan-500/30'},
-                'violet': {'bg': 'bg-violet-500/15', 'border': 'border-violet-500/40', 'text': 'text-violet-400', 'icon_bg': 'bg-violet-500/20', 'line': 'bg-violet-500/30'},
-                'blue': {'bg': 'bg-blue-500/15', 'border': 'border-blue-500/40', 'text': 'text-blue-400', 'icon_bg': 'bg-blue-500/20', 'line': 'bg-blue-500/30'},
-                'red': {'bg': 'bg-red-500/15', 'border': 'border-red-500/40', 'text': 'text-red-400', 'icon_bg': 'bg-red-500/20', 'line': 'bg-red-500/30'},
-                'amber': {'bg': 'bg-amber-500/15', 'border': 'border-amber-500/40', 'text': 'text-amber-400', 'icon_bg': 'bg-amber-500/20', 'line': 'bg-amber-500/30'},
-                'green': {'bg': 'bg-green-500/15', 'border': 'border-green-500/40', 'text': 'text-green-400', 'icon_bg': 'bg-green-500/20', 'line': 'bg-green-500/30'},
-                'orange': {'bg': 'bg-orange-500/15', 'border': 'border-orange-500/40', 'text': 'text-orange-400', 'icon_bg': 'bg-orange-500/20', 'line': 'bg-orange-500/30'},
-                'gray': {'bg': 'bg-slate-600/15', 'border': 'border-slate-600/40', 'text': 'text-gray-400', 'icon_bg': 'bg-slate-600/20', 'line': 'bg-slate-600/30'}
-            } %}
-            {% set c = color_map.get(node_color, color_map['gray']) %}
-
-            {# Render the node #}
-            <div class="flex items-start gap-3 relative">
-                {# Vertical connector line #}
-                {% if not loop.last %}
-                <div class="absolute left-[17px] top-[36px] bottom-0 w-0.5 {{ c.line }}"></div>
-                {% endif %}
-
-                {# Icon circle #}
-                <div class="flex-shrink-0 w-[36px] h-[36px] rounded-full {{ c.icon_bg }} border {{ c.border }} flex items-center justify-center z-10">
-                    <svg class="w-4 h-4 {{ c.text }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">{{ node_icon }}</svg>
-                </div>
-
-                {# Node content #}
-                <div class="flex-1 {{ c.bg }} border {{ c.border }} rounded-lg px-4 py-2.5 mb-2 min-w-0">
-                    <div class="flex items-center justify-between gap-3 flex-wrap">
-                        <div class="flex items-center gap-2 min-w-0">
-                            <span class="text-xs font-mono text-gray-500">#{{ iteration }}</span>
-                            <span class="text-sm font-semibold {{ c.text }} truncate">{{ node_label }}</span>
-                        </div>
-                        <div class="flex items-center gap-2 flex-shrink-0">
-                            {# Status indicator #}
-                            {% if tool == 'send_http_request' and result.status_code %}
-                                {% if result.is_server_error %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">{{ result.status_code }} ERROR</span>
-                                {% elif result.status_code == 200 and ('root:x:0:0:' in (result.body or '') or 'uid=0(root)' in (result.body or '') or 'dashboard' in (result.body or '').lower()) %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">EXPLOITED</span>
-                                {% else %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-600/40 text-gray-400">{{ result.status_code }}</span>
-                                {% endif %}
-                            {% elif tool == 'execute_safe_poc' %}
-                                {% if result.exploit_confirmed %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">CONFIRMED</span>
-                                {% else %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-600/40 text-gray-400">NOT CONFIRMED</span>
-                                {% endif %}
-                            {% elif tool == 'generate_patch' %}
-                                {% if not result.error %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 border border-green-500/30">PATCHED</span>
-                                {% endif %}
-                            {% elif tool == 'run_nmap' %}
-                                {% set port_count = (result.results or []) | length %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">{{ port_count }} port{{ 's' if port_count != 1 }}</span>
-                            {% elif tool == 'query_hackclub' %}
-                                {% if result.error %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">FAILED</span>
-                                {% else %}
-                                <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400 border border-violet-500/30">{{ (result.references or []) | length }} refs</span>
-                                {% endif %}
-                            {% endif %}
-                        </div>
-                    </div>
-                    {# Detail line #}
-                    {% if entry.reasoning %}
-                    <p class="text-xs text-gray-400 mt-1 truncate">{{ entry.reasoning | truncate(120) }}</p>
-                    {% endif %}
-                    {% if tool == 'run_nmap' and result.results %}
-                    <div class="flex flex-wrap gap-1.5 mt-1.5">
-                        {% for svc in result.results %}
-                        <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-700/60 text-gray-300">{{ svc.port }}/{{ svc.service }}{% if svc.version %} {{ svc.version }}{% endif %}</span>
-                        {% endfor %}
-                    </div>
-                    {% elif tool == 'generate_patch' %}
-                    <p class="text-xs text-gray-300 mt-1 font-mono">{{ (args.vuln_node or '') | truncate(60) }}</p>
-                    {% endif %}
-                </div>
-            </div>
-            {% endfor %}
+    <!-- Canvas Graph Container -->
+    <div class="relative rounded-lg border border-slate-700 bg-slate-900/80 overflow-hidden" style="height: 520px;">
+        <canvas id="attackGraphCanvas" class="w-full h-full" style="width:100%;height:100%;"></canvas>
+        <!-- Tooltip -->
+        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-xs px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 shadow-xl text-xs text-gray-200 leading-relaxed"></div>
+        <!-- Zoom controls -->
+        <div class="absolute bottom-3 right-3 flex gap-1.5">
+            <button onclick="graphZoom(1.2)" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-sm font-bold">+</button>
+            <button onclick="graphZoom(0.8)" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-sm font-bold">&minus;</button>
+            <button onclick="graphReset()" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-xs">&#8634;</button>
         </div>
     </div>
+
+    <script>
+    (function() {
+        const raw = {{ tool_results | tojson }};
+        const canvas = document.getElementById('attackGraphCanvas');
+        const ctx = canvas.getContext('2d');
+        const tooltip = document.getElementById('graphTooltip');
+        let scale = 1, offsetX = 0, offsetY = 0, dragging = false, lastMouse = {x:0,y:0};
+        const dpr = window.devicePixelRatio || 1;
+
+        // Colors
+        const COLORS = {
+            run_nmap: {fill:'#155e75', stroke:'#22d3ee', text:'#67e8f9'},
+            query_hackclub: {fill:'#4c1d95', stroke:'#a78bfa', text:'#c4b5fd'},
+            send_http_request: {fill:'#1e3a5f', stroke:'#3b82f6', text:'#93c5fd'},
+            send_http_request_exploit: {fill:'#7f1d1d', stroke:'#f87171', text:'#fca5a5'},
+            execute_safe_poc: {fill:'#78350f', stroke:'#fbbf24', text:'#fde68a'},
+            execute_safe_poc_confirmed: {fill:'#7f1d1d', stroke:'#f87171', text:'#fca5a5'},
+            generate_patch: {fill:'#14532d', stroke:'#4ade80', text:'#bbf7d0'},
+            run_fuzzer: {fill:'#7c2d12', stroke:'#fb923c', text:'#fed7aa'},
+            default: {fill:'#334155', stroke:'#64748b', text:'#94a3b8'}
+        };
+
+        function getNodeColor(entry) {
+            const t = entry.tool, r = entry.result || {};
+            if (t === 'send_http_request') {
+                if (r.is_server_error || r.server_crash_suspected) return COLORS.send_http_request_exploit;
+                const b = (r.body||'').toLowerCase();
+                if (r.status_code === 200 && (b.includes('root:x:0:0:') || b.includes('uid=0(root)'))) return COLORS.send_http_request_exploit;
+            }
+            if (t === 'execute_safe_poc' && r.exploit_confirmed) return COLORS.execute_safe_poc_confirmed;
+            return COLORS[t] || COLORS.default;
+        }
+
+        function getLabel(entry) {
+            const t = entry.tool, a = entry.arguments || {};
+            if (t === 'run_nmap') return 'Nmap: ' + (a.target||'').replace(/^https?:\/\//, '');
+            if (t === 'query_hackclub') return 'CVE: ' + (a.component||'') + ' ' + (a.version||'');
+            if (t === 'send_http_request') {
+                let ep = (a.endpoint||'').replace(/^https?:\/\/[^/]+/, '');
+                if (ep.length > 28) ep = ep.slice(0,25)+'...';
+                return (a.method||'GET') + ' ' + ep;
+            }
+            if (t === 'execute_safe_poc') return 'PoC: ' + (a.sandbox_id||'verify');
+            if (t === 'generate_patch') return 'Patch: ' + (a.vuln_node||'fix').slice(0,20);
+            if (t === 'run_fuzzer') return 'Fuzz';
+            return t;
+        }
+
+        function getStatus(entry) {
+            const t = entry.tool, r = entry.result || {};
+            if (t === 'run_nmap') return ((r.results||[]).length) + ' ports';
+            if (t === 'query_hackclub') return r.error ? 'FAILED' : ((r.references||[]).length)+' refs';
+            if (t === 'send_http_request') {
+                if (r.is_server_error) return r.status_code + ' ERROR';
+                const b = (r.body||'').toLowerCase();
+                if (r.status_code===200 && (b.includes('root:x:0:0:') || b.includes('uid=0(root)') || b.includes('dashboard'))) return 'EXPLOITED';
+                return ''+r.status_code;
+            }
+            if (t === 'execute_safe_poc') return r.exploit_confirmed ? 'CONFIRMED' : 'NEGATIVE';
+            if (t === 'generate_patch') return r.error ? 'FAILED' : 'PATCHED';
+            return '';
+        }
+
+        // Build nodes
+        const NODE_W = 200, NODE_H = 56, PAD_X = 70, PAD_Y = 28;
+        const COLS = 4;
+        const nodes = raw.map((entry, i) => {
+            const col = i % COLS;
+            const row = Math.floor(i / COLS);
+            // Zigzag: even rows go left-to-right, odd rows right-to-left
+            const x = (row % 2 === 0) ? 40 + col * (NODE_W + PAD_X) : 40 + (COLS - 1 - col) * (NODE_W + PAD_X);
+            const y = 40 + row * (NODE_H + PAD_Y);
+            return {x, y, w: NODE_W, h: NODE_H, entry, color: getNodeColor(entry), label: getLabel(entry), status: getStatus(entry), iteration: entry.iteration !== undefined ? entry.iteration : i};
+        });
+
+        function resize() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            draw();
+        }
+
+        function draw() {
+            const w = canvas.width / dpr, h = canvas.height / dpr;
+            ctx.save();
+            ctx.clearRect(0, 0, w, h);
+            ctx.translate(offsetX, offsetY);
+            ctx.scale(scale, scale);
+
+            // Draw edges (arrows)
+            for (let i = 0; i < nodes.length - 1; i++) {
+                const a = nodes[i], b = nodes[i+1];
+                const ax = a.x + a.w/2, ay = a.y + a.h;
+                const bx = b.x + b.w/2, by = b.y;
+                ctx.beginPath();
+                ctx.moveTo(ax, ay);
+                // Curved connector
+                const midY = (ay + by) / 2;
+                ctx.bezierCurveTo(ax, midY, bx, midY, bx, by);
+                ctx.strokeStyle = '#475569';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                // Arrowhead
+                const angle = Math.atan2(by - midY, bx - bx) || Math.PI/2;
+                ctx.beginPath();
+                ctx.moveTo(bx, by);
+                ctx.lineTo(bx - 5, by - 8);
+                ctx.lineTo(bx + 5, by - 8);
+                ctx.closePath();
+                ctx.fillStyle = '#475569';
+                ctx.fill();
+            }
+
+            // Draw nodes
+            for (const n of nodes) {
+                // Shadow
+                ctx.shadowColor = n.color.stroke + '40';
+                ctx.shadowBlur = 12;
+                // Body
+                ctx.beginPath();
+                ctx.roundRect(n.x, n.y, n.w, n.h, 10);
+                ctx.fillStyle = n.color.fill;
+                ctx.fill();
+                ctx.strokeStyle = n.color.stroke;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+
+                // Iteration badge
+                ctx.font = '600 9px ui-monospace, monospace';
+                ctx.fillStyle = '#64748b';
+                ctx.textBaseline = 'top';
+                ctx.fillText('#' + n.iteration, n.x + 8, n.y + 8);
+
+                // Label
+                ctx.font = '600 11px -apple-system, sans-serif';
+                ctx.fillStyle = n.color.text;
+                ctx.fillText(n.label.slice(0, 26), n.x + 8, n.y + 22);
+
+                // Status badge
+                if (n.status) {
+                    const badgeX = n.x + 8, badgeY = n.y + 38;
+                    ctx.font = '700 9px ui-monospace, monospace';
+                    const tw = ctx.measureText(n.status).width;
+                    ctx.beginPath();
+                    ctx.roundRect(badgeX, badgeY, tw + 10, 14, 4);
+                    ctx.fillStyle = n.color.stroke + '30';
+                    ctx.fill();
+                    ctx.fillStyle = n.color.text;
+                    ctx.fillText(n.status, badgeX + 5, badgeY + 3);
+                }
+            }
+
+            ctx.restore();
+        }
+
+        // Pan & zoom
+        canvas.addEventListener('mousedown', e => { dragging = true; lastMouse = {x: e.clientX, y: e.clientY}; canvas.style.cursor = 'grabbing'; });
+        canvas.addEventListener('mousemove', e => {
+            if (dragging) { offsetX += e.clientX - lastMouse.x; offsetY += e.clientY - lastMouse.y; lastMouse = {x: e.clientX, y: e.clientY}; draw(); }
+            else {
+                // Tooltip
+                const rect = canvas.getBoundingClientRect();
+                const mx = (e.clientX - rect.left - offsetX) / scale;
+                const my = (e.clientY - rect.top - offsetY) / scale;
+                let hit = null;
+                for (const n of nodes) { if (mx >= n.x && mx <= n.x+n.w && my >= n.y && my <= n.y+n.h) { hit = n; break; } }
+                if (hit) {
+                    const r = hit.entry.reasoning || '';
+                    tooltip.innerHTML = '<b class="text-gray-100">#'+hit.iteration+' '+hit.label+'</b>'+(r ? '<br>'+r.slice(0,150) : '');
+                    tooltip.style.left = (e.clientX - rect.left + 12) + 'px';
+                    tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
+                    tooltip.classList.remove('hidden');
+                    canvas.style.cursor = 'pointer';
+                } else { tooltip.classList.add('hidden'); canvas.style.cursor = 'grab'; }
+            }
+        });
+        canvas.addEventListener('mouseup', () => { dragging = false; canvas.style.cursor = 'grab'; });
+        canvas.addEventListener('mouseleave', () => { dragging = false; tooltip.classList.add('hidden'); canvas.style.cursor = 'grab'; });
+        canvas.addEventListener('wheel', e => { e.preventDefault(); const z = e.deltaY < 0 ? 1.1 : 0.9; scale *= z; scale = Math.max(0.3, Math.min(3, scale)); draw(); }, {passive:false});
+
+        window.graphZoom = function(f) { scale *= f; scale = Math.max(0.3, Math.min(3, scale)); draw(); };
+        window.graphReset = function() { scale = 1; offsetX = 0; offsetY = 0; draw(); };
+
+        window.addEventListener('resize', resize);
+        resize();
+    })();
+    </script>
 
     {% else %}
     <p class="text-gray-500 text-sm">No scan data yet</p>
