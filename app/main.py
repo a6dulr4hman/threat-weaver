@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, init_db
 from app.models import Workspace
-from app.routers import config, jobs, workspaces
+from app.routers import jobs, workspaces
 from app.templating import templates
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,7 +26,6 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 app.include_router(workspaces.router)
 app.include_router(jobs.router)
-app.include_router(config.router)
 
 
 @app.get("/")
