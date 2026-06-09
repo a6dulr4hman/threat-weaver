@@ -18,6 +18,7 @@ class AnalysisJob(Base):
     id = Column(String(36), primary_key=True)
     workspace_id = Column(String(36), ForeignKey("workspaces.id"), nullable=False)
     status = Column(String(50), nullable=False)
+    pipeline_phase = Column(String(50), nullable=True, default="ready")
     overall_severity = Column(String(20), nullable=True)
     attack_graph_data = Column(JSON, nullable=True)
 

@@ -109,10 +109,21 @@ TRANSITIONS = {
 class OrchestratorFSM:
     """Finite State Machine orchestrator for security analysis workflow."""
 
+    # Ordered list of FSM states for high-water-mark comparison.
+    FSM_ORDER = [
+        FSMState.READY,
+        FSMState.RECON,
+        FSMState.DAST_TESTING,
+        FSMState.POC_VERIFICATION,
+        FSMState.BLUE_TEAM_REMEDIATION,
+        FSMState.COMPLETE,
+    ]
+
     def __init__(self, db: AsyncSession, job_id: str):
         self.db = db
         self.job_id = job_id
         self.state: FSMState = FSMState.READY
+        self.pipeline_phase: FSMState = FSMState.READY
         self.attack_graph: dict = {}
         self.llm_client = LLMClient()
         self.mcp_client = MCPClient()
@@ -131,6 +142,14 @@ class OrchestratorFSM:
                 self.state = FSMState(job.status)
             except ValueError:
                 self.state = FSMState.READY
+            # Load pipeline_phase; fall back to current state for backwards compat.
+            if job.pipeline_phase:
+                try:
+                    self.pipeline_phase = FSMState(job.pipeline_phase)
+                except ValueError:
+                    self.pipeline_phase = self.state
+            else:
+                self.pipeline_phase = self.state
             self.attack_graph = job.attack_graph_data or {}
 
     async def save_state(self) -> None:
@@ -141,6 +160,7 @@ class OrchestratorFSM:
 
         if job:
             job.status = self.state.value
+            job.pipeline_phase = self.pipeline_phase.value
             job.attack_graph_data = self.attack_graph
             await self.db.commit()
 
@@ -532,6 +552,7 @@ class OrchestratorFSM:
                 continue
             if not self.transition(next_state):
                 break
+        self.pipeline_phase = FSMState.COMPLETE
 
     # --- Phase 6: severity scoring + alert routing ------------------------
 
@@ -707,6 +728,13 @@ class OrchestratorFSM:
         target_state = tool_to_min_state.get(tool_name)
         if not target_state:
             return
+
+        # Update high-water-mark pipeline_phase (only advances forward).
+        target_idx = self.FSM_ORDER.index(target_state)
+        current_phase_idx = self.FSM_ORDER.index(self.pipeline_phase)
+        if target_idx > current_phase_idx:
+            self.pipeline_phase = target_state
+
         # Only advance one step (the next valid state from current)
         valid_next = TRANSITIONS.get(self.state, [])
         if valid_next and self.state != target_state:

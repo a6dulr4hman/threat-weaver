@@ -1116,3 +1116,99 @@ async def test_error_exit_still_finalizes(db_session):
     assert final_state == FSMState.COMPLETE
     assert "k2_error" in fsm.attack_graph
     assert "report" in fsm.attack_graph
+
+
+# --- Pipeline phase (high-water-mark) tests ---
+
+
+def test_pipeline_phase_never_regresses():
+    """
+    pipeline_phase only moves forward. Simulates a multi-vulnerability scan
+    where the agent loops back to earlier tools (run_nmap) after already
+    reaching a later phase (BLUE_TEAM_REMEDIATION). The pipeline_phase must
+    stay at the high-water-mark.
+    """
+    fsm = OrchestratorFSM(db=MagicMock(), job_id="phase-test-job")
+
+    assert fsm.pipeline_phase == FSMState.READY
+
+    # run_nmap -> pipeline_phase should advance to RECON
+    fsm._maybe_advance_state("run_nmap")
+    assert fsm.pipeline_phase == FSMState.RECON
+
+    # send_http_request -> DAST_TESTING
+    fsm._maybe_advance_state("send_http_request")
+    assert fsm.pipeline_phase == FSMState.DAST_TESTING
+
+    # generate_patch -> BLUE_TEAM_REMEDIATION
+    fsm._maybe_advance_state("generate_patch")
+    assert fsm.pipeline_phase == FSMState.BLUE_TEAM_REMEDIATION
+
+    # Now simulate next iteration: run_nmap again (earlier phase tool).
+    # pipeline_phase must NOT regress.
+    fsm._maybe_advance_state("run_nmap")
+    assert fsm.pipeline_phase == FSMState.BLUE_TEAM_REMEDIATION
+
+    # send_http_request again - still no regression
+    fsm._maybe_advance_state("send_http_request")
+    assert fsm.pipeline_phase == FSMState.BLUE_TEAM_REMEDIATION
+
+    # execute_safe_poc (POC_VERIFICATION) - still behind BLUE_TEAM_REMEDIATION
+    fsm._maybe_advance_state("execute_safe_poc")
+    assert fsm.pipeline_phase == FSMState.BLUE_TEAM_REMEDIATION
+
+
+async def test_pipeline_phase_persisted(db_session):
+    """pipeline_phase is persisted to the DB via save_state and reloaded via hydrate_state."""
+    workspace_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+
+    workspace = Workspace(
+        id=workspace_id,
+        target_url="https://example.com",
+        verification_nonce="abc123",
+        verification_status=True,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+
+    job = AnalysisJob(
+        id=job_id,
+        workspace_id=workspace_id,
+        status="ready",
+        pipeline_phase="ready",
+        attack_graph_data={},
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # Create FSM, advance pipeline_phase, save
+    fsm = OrchestratorFSM(db=db_session, job_id=job_id)
+    fsm._maybe_advance_state("run_nmap")
+    fsm._maybe_advance_state("send_http_request")
+    fsm._maybe_advance_state("generate_patch")
+    assert fsm.pipeline_phase == FSMState.BLUE_TEAM_REMEDIATION
+
+    await fsm.save_state()
+
+    # Verify in DB
+    from sqlalchemy import select as sa_select
+
+    stmt = sa_select(AnalysisJob).where(AnalysisJob.id == job_id)
+    result = await db_session.execute(stmt)
+    updated_job = result.scalar_one()
+    assert updated_job.pipeline_phase == "blue_team_remediation"
+
+    # Reload via hydrate_state on a fresh FSM instance
+    fsm2 = OrchestratorFSM(db=db_session, job_id=job_id)
+    await fsm2.hydrate_state()
+    assert fsm2.pipeline_phase == FSMState.BLUE_TEAM_REMEDIATION
+
+
+def test_advance_to_complete_sets_pipeline_phase():
+    """_advance_to_complete sets pipeline_phase to COMPLETE."""
+    fsm = OrchestratorFSM(db=MagicMock(), job_id="complete-test")
+    assert fsm.pipeline_phase == FSMState.READY
+    fsm._advance_to_complete()
+    assert fsm.state == FSMState.COMPLETE
+    assert fsm.pipeline_phase == FSMState.COMPLETE

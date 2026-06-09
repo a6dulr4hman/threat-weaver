@@ -69,6 +69,7 @@ class JobResponse(BaseModel):
     id: str
     workspace_id: str
     status: str
+    pipeline_phase: Optional[str] = None
     overall_severity: Optional[str] = None
     attack_graph_data: Any = None
 
