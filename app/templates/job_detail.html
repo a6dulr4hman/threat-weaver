@@ -180,256 +180,143 @@
     <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center">
         <svg class="w-5 h-5 mr-2 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
         Attack Graph
+        <span id="graphLiveTag" class="ml-3 {% if job.status == 'complete' %}hidden{% endif %} inline-flex items-center gap-1.5 text-xs text-cyan-400 font-normal">
+            <span class="relative flex h-2 w-2"><span class="animate-ping absolute h-full w-full rounded-full bg-cyan-400 opacity-75"></span><span class="relative rounded-full h-2 w-2 bg-cyan-500"></span></span>Live
+        </span>
     </h2>
 
-    {% if job.attack_graph_data and job.attack_graph_data.tool_results %}
-    {% set tool_results = job.attack_graph_data.tool_results %}
-    {% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data.token_usage else None %}
+    {% set tool_results = job.attack_graph_data.tool_results if job.attack_graph_data and job.attack_graph_data.tool_results else [] %}
+    {% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data and job.attack_graph_data.token_usage else None %}
 
-    <!-- Token Usage Stats -->
     {% if token_usage %}
-    <div class="flex flex-wrap items-center gap-5 mb-5 pb-4 border-b border-slate-700/60">
-        <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">Total Tokens</span>
-            <span class="text-sm font-bold text-gray-100">{{ "{:,}".format(token_usage.total_tokens or 0) }}</span>
-        </div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Prompt:</span><span class="text-sm text-gray-300">{{ "{:,}".format(token_usage.prompt_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Completion:</span><span class="text-sm text-gray-300">{{ "{:,}".format(token_usage.completion_tokens or 0) }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">LLM Calls:</span><span class="text-sm text-gray-300">{{ token_usage.llm_calls or 0 }}</span></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Iterations:</span><span class="text-sm text-gray-300">{{ tool_results | length }}</span></div>
+    <div class="flex flex-wrap items-center gap-5 mb-4 pb-4 border-b border-slate-700/60">
+        <div class="flex items-center gap-2"><svg class="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg><span class="text-xs text-gray-400 uppercase tracking-wider">Tokens</span><span class="text-sm font-bold text-gray-100" id="statTotal">{{ "{:,}".format(token_usage.total_tokens or 0) }}</span></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Prompt:</span><span class="text-sm text-gray-300" id="statPrompt">{{ "{:,}".format(token_usage.prompt_tokens or 0) }}</span></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Completion:</span><span class="text-sm text-gray-300" id="statComp">{{ "{:,}".format(token_usage.completion_tokens or 0) }}</span></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">LLM Calls:</span><span class="text-sm text-gray-300" id="statCalls">{{ token_usage.llm_calls or 0 }}</span></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-gray-400">Steps:</span><span class="text-sm text-gray-300" id="statIter">{{ tool_results | length }}</span></div>
     </div>
     {% endif %}
 
-    <!-- Canvas Graph Container -->
-    <div class="relative rounded-lg border border-slate-700 bg-slate-900/80 overflow-hidden" style="height: 580px;">
-        <canvas id="attackGraphCanvas" class="w-full h-full" style="width:100%;height:100%;cursor:grab;"></canvas>
-        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-sm px-4 py-3 rounded-lg bg-slate-700 border border-slate-600 shadow-xl text-xs text-gray-200 leading-relaxed"></div>
-        <div class="absolute bottom-3 right-3 flex gap-1.5">
-            <button onclick="graphZoom(1.2)" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-sm font-bold">+</button>
-            <button onclick="graphZoom(0.8)" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-sm font-bold">&minus;</button>
-            <button onclick="graphReset()" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-xs">&#8634;</button>
+    <div class="relative rounded-lg border border-slate-700 bg-slate-900/80 overflow-hidden" style="height:600px;" id="graphWrap">
+        <canvas id="attackGraphCanvas" style="width:100%;height:100%;cursor:grab;"></canvas>
+        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-sm px-4 py-3 rounded-lg bg-slate-700/95 border border-slate-500 shadow-2xl text-xs text-gray-200 leading-relaxed backdrop-blur-sm"></div>
+        <div class="absolute bottom-3 right-3 flex gap-1.5 z-20">
+            <button onclick="graphZoom(1.3)" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-base font-bold">+</button>
+            <button onclick="graphZoom(0.7)" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-base font-bold">&minus;</button>
+            <button onclick="graphReset()" class="w-8 h-8 rounded-lg bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-xs font-bold">&#x21BA;</button>
         </div>
-        <div class="absolute top-3 left-3 flex gap-3 text-[10px] text-gray-400">
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-cyan-500"></span>Recon</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span>Scanning</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>Finding</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>Verification</span>
-            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-green-500"></span>Remediation</span>
+        <div class="absolute top-3 left-3 flex gap-4 text-[10px] text-gray-400 z-20">
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-cyan-500/80"></span>Recon</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-blue-500/80"></span>Scanning</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-red-500/80"></span>Finding</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-amber-500/80"></span>PoC</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-green-500/80"></span>Patch</span>
         </div>
     </div>
 
     <script>
-    (function() {
-        const raw = {{ tool_results | tojson }};
-        const canvas = document.getElementById('attackGraphCanvas');
-        const ctx = canvas.getContext('2d');
-        const tooltip = document.getElementById('graphTooltip');
-        let scale = 1, offsetX = 0, offsetY = 0, dragging = false, lastMouse = {x:0,y:0};
-        const dpr = window.devicePixelRatio || 1;
+    (function(){
+    const JOB_ID='{{ job.id }}',JOB_STATUS='{{ job.status }}';
+    let raw={{ tool_results | tojson }};
+    const canvas=document.getElementById('attackGraphCanvas');
+    const ctx=canvas.getContext('2d');
+    const tooltip=document.getElementById('graphTooltip');
+    let scale=1,offsetX=30,offsetY=0,dragging=false,lastMouse={x:0,y:0};
+    const dpr=window.devicePixelRatio||1;
+    const C={recon:{bg:'#0c4a6e',border:'#22d3ee',title:'#67e8f9',text:'#a5f3fc',dim:'#64748b'},scan:{bg:'#172554',border:'#3b82f6',title:'#93c5fd',text:'#bfdbfe',dim:'#64748b'},finding:{bg:'#450a0a',border:'#f87171',title:'#fca5a5',text:'#fecaca',dim:'#a8a29e'},verify:{bg:'#451a03',border:'#fbbf24',title:'#fde68a',text:'#fef3c7',dim:'#a8a29e'},patch:{bg:'#052e16',border:'#4ade80',title:'#bbf7d0',text:'#dcfce7',dim:'#64748b'}};
 
-        // ─── Group raw tool_results into logical STEPS ───────────────────
-        function buildSteps(entries) {
-            const steps = [];
-            let reconServices = [], reconCVEs = [];
-            let probeGroups = {};
-            let findings = [];
-            let verifications = [];
-            let patches = [];
-
-            for (const e of entries) {
-                const t = e.tool, r = e.result || {}, a = e.arguments || {};
-                if (t === 'run_nmap') {
-                    for (const svc of (r.results || [])) reconServices.push(svc);
-                } else if (t === 'query_hackclub') {
-                    reconCVEs.push({component: a.component||'', version: a.version||'', refs: r.references||[], error: r.error});
-                } else if (t === 'send_http_request') {
-                    const ep = (a.endpoint||'').replace(/^https?:\/\/[^/]+/, '').split('?')[0].replace(/%27.*$|'.*$/,'') || '/';
-                    const isAnomaly = r.is_server_error || r.server_crash_suspected || r.stack_trace_detected;
-                    const body = (r.body||'').toLowerCase();
-                    const isExploit = (r.status_code===200 && (body.includes('root:x:0:0:') || body.includes('uid=0(root)') || body.includes('dashboard')));
-                    if (isAnomaly || isExploit) {
-                        findings.push({endpoint: ep, method: a.method||'GET', status: r.status_code, type: isExploit?'exploit':'error', reasoning: e.reasoning||''});
-                    } else {
-                        if (!probeGroups[ep]) probeGroups[ep] = [];
-                        probeGroups[ep].push({method: a.method||'GET', status: r.status_code});
-                    }
-                } else if (t === 'execute_safe_poc') {
-                    verifications.push({sandbox: a.sandbox_id||'poc', confirmed: r.exploit_confirmed||false, reasoning: e.reasoning||''});
-                } else if (t === 'generate_patch') {
-                    patches.push({vuln: a.vuln_node||'unknown', error: r.error, reasoning: e.reasoning||''});
-                }
-            }
-
-            // 1. RECON
-            if (reconServices.length || reconCVEs.length) {
-                steps.push({type:'recon', label:'Reconnaissance',
-                    detail: reconServices.map(s=>s.port+'/'+s.service+(s.version?' '+s.version:'')).join(', '),
-                    sub: reconCVEs.filter(c=>!c.error).map(c=>c.component+' '+c.version).join(', ') || (reconCVEs.length?'CVE lookup failed':''),
-                    tooltip:'Nmap scan results:\n'+reconServices.map(s=>'  Port '+s.port+': '+s.service+' '+s.version).join('\n')+(reconCVEs.length?'\n\nCVE lookups: '+reconCVEs.map(c=>c.component+' '+c.version).join(', '):'')
-                });
-            }
-            // 2. SCAN (merged)
-            const probeEps = Object.keys(probeGroups);
-            if (probeEps.length) {
-                const total = Object.values(probeGroups).reduce((s,g)=>s+g.length,0);
-                steps.push({type:'scan', label:'Endpoint Scanning',
-                    detail: total+' requests → '+probeEps.length+' endpoints',
-                    sub: probeEps.slice(0,4).join(', ')+(probeEps.length>4?' +'+(probeEps.length-4)+' more':''),
-                    tooltip:'Probed endpoints:\n'+probeEps.map(ep=>'  '+ep+' ('+probeGroups[ep].length+' req)').join('\n')
-                });
-            }
-            // 3. FINDINGS (branch — one per unique endpoint)
-            const seen = new Set();
-            for (const f of findings) { if (!seen.has(f.endpoint)) { seen.add(f.endpoint); steps.push({type:'finding', label:(f.type==='exploit'?'Exploited':'Anomaly')+': '+f.endpoint, detail:f.method+' → '+(f.type==='exploit'?'SUCCESS':'HTTP '+f.status), sub:f.reasoning.slice(0,60), tooltip:f.reasoning||(f.method+' '+f.endpoint)}); } }
-            // 4. VERIFY
-            const confirmed = verifications.filter(v=>v.confirmed);
-            if (confirmed.length) steps.push({type:'verify', label:'PoC Confirmed', detail:confirmed.length+' exploit(s) verified', sub:confirmed.map(v=>v.sandbox).join(', '), tooltip:'Confirmed:\n'+confirmed.map(v=>'  '+v.sandbox+': '+v.reasoning).join('\n')});
-            else if (verifications.length) steps.push({type:'verify_fail', label:'PoC Attempted', detail:verifications.length+' attempt(s)', sub:'None confirmed', tooltip:'PoC ran but did not confirm'});
-            // 5. PATCHES
-            for (const p of patches) steps.push({type:'patch', label:'Patched: '+p.vuln.replace(/_/g,' ').slice(0,22), detail:p.error?'FAILED':'Remediation generated', sub:p.reasoning.slice(0,50), tooltip:p.reasoning||('Patch: '+p.vuln)});
-            return steps;
+    function buildSteps(entries){
+        const steps=[];let reconSvc=[],reconCVE=[],probes={},findings=[],pocs=[],patches=[];
+        for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{};
+            if(t==='run_nmap'){for(const s of(r.results||[]))reconSvc.push(s);}
+            else if(t==='query_hackclub'){reconCVE.push({comp:a.component||'',ver:a.version||'',refs:r.references||[],err:r.error});}
+            else if(t==='send_http_request'){const ep=(a.endpoint||'').replace(/^https?:\/\/[^/]+/,'').split('?')[0].replace(/%27.*$|'.*$/,'')||'/';const isErr=r.is_server_error||r.server_crash_suspected||r.stack_trace_detected;const body=(r.body||'').toLowerCase();const isExploit=(r.status_code===200&&(body.includes('root:x:0:0:')||body.includes('uid=0(root)')||body.includes('dashboard')));if(isErr||isExploit){const key=ep+'|'+(isExploit?'exploit':'error');if(!findings.find(f=>f.key===key))findings.push({key,endpoint:ep,method:a.method||'GET',status:r.status_code,type:isExploit?'exploit':'error',reasoning:e.reasoning||''});}else{if(!probes[ep])probes[ep]=[];probes[ep].push({m:a.method||'GET',s:r.status_code});}}
+            else if(t==='execute_safe_poc'){pocs.push({id:a.sandbox_id||'poc',confirmed:!!r.exploit_confirmed,detail:(r.match_detail||'').slice(0,80),reasoning:e.reasoning||''});}
+            else if(t==='generate_patch'){patches.push({vuln:a.vuln_node||'unknown',ok:!r.error,reasoning:e.reasoning||''});}
         }
+        // Detect FTP/non-HTTP findings from confirmed PoCs or patches
+        for(const p of pocs){if(p.confirmed){const rl=p.reasoning.toLowerCase();if(rl.includes('ftp')||rl.includes('vsftpd')||rl.includes('6200')||rl.includes('backdoor')){if(!findings.find(f=>f.endpoint.includes('FTP')))findings.push({key:'ftp|exploit',endpoint:'FTP :21',method:'TCP',status:0,type:'exploit',reasoning:p.reasoning});}}}
+        for(const pt of patches){const vl=pt.vuln.toLowerCase();if((vl.includes('ftp')||vl.includes('vsftpd')||vl.includes('backdoor'))&&!findings.find(f=>f.endpoint.includes('FTP')))findings.push({key:'ftp|exploit',endpoint:'FTP :21',method:'TCP',status:0,type:'exploit',reasoning:'vsftpd 2.3.4 backdoor'});}
+        // Also detect from nmap + CVE lookup combo
+        if(reconSvc.find(s=>s.service==='ftp'&&s.version&&s.version.includes('2.3'))&&!findings.find(f=>f.endpoint.includes('FTP'))){findings.push({key:'ftp|exploit',endpoint:'FTP :21 (vsftpd 2.3.4)',method:'TCP',status:0,type:'exploit',reasoning:'Known backdoor CVE-2011-2523'});}
 
-        const steps = buildSteps(raw);
+        // Build step list
+        if(reconSvc.length||reconCVE.length){const lines=reconSvc.map(s=>'Port '+s.port+': '+s.service+(s.version?' '+s.version:''));const cl=reconCVE.map(c=>c.comp+' '+c.ver+(c.err?' (failed)':' \u2192 '+(c.refs.length)+' refs'));steps.push({type:'recon',title:'Reconnaissance',lines:[...lines,...cl]});}
+        const eps=Object.keys(probes);if(eps.length){const total=Object.values(probes).reduce((s,g)=>s+g.length,0);steps.push({type:'scan',title:'Endpoint Scanning',lines:[total+' requests \u2192 '+eps.length+' endpoints',...eps.slice(0,6).map(e=>'  '+e+' ('+probes[e].length+'x)'),...(eps.length>6?['  +'+(eps.length-6)+' more']:[]) ]});}
+        for(const f of findings)steps.push({type:'finding',title:(f.type==='exploit'?'\u2713 Exploited':'\u26A0 Anomaly'),lines:[f.endpoint,f.method+(f.status?' \u2192 HTTP '+f.status:''),f.reasoning.slice(0,70)]});
+        for(const p of pocs)steps.push({type:'verify',title:p.confirmed?'\u2713 PoC Confirmed':'\u2717 PoC Negative',lines:[p.id,p.confirmed?'Exploit verified':'Not confirmed',p.detail||p.reasoning.slice(0,60)]});
+        for(const p of patches)steps.push({type:'patch',title:'Patch: '+p.vuln.replace(/_/g,' '),lines:[p.ok?'Remediation generated':'Generation failed',p.reasoning.slice(0,70)]});
+        return steps;
+    }
 
-        // ─── Layout: center single nodes, fan-out findings in parallel ───
-        const COLORS = {
-            recon:{fill:'#0c4a6e',stroke:'#22d3ee',text:'#67e8f9',glow:'#22d3ee'},
-            scan:{fill:'#1e3a5f',stroke:'#3b82f6',text:'#93c5fd',glow:'#3b82f6'},
-            finding:{fill:'#7f1d1d',stroke:'#f87171',text:'#fca5a5',glow:'#f87171'},
-            verify:{fill:'#78350f',stroke:'#fbbf24',text:'#fde68a',glow:'#fbbf24'},
-            verify_fail:{fill:'#44403c',stroke:'#a8a29e',text:'#d6d3d1',glow:'#a8a29e'},
-            patch:{fill:'#14532d',stroke:'#4ade80',text:'#bbf7d0',glow:'#4ade80'}
-        };
-        const NODE_W=240, NODE_H=70;
-
-        function layoutNodes(steps) {
-            const nodes=[]; let y=50; const cx=420;
-            let i=0;
-            while(i<steps.length) {
-                // Collect consecutive findings for parallel layout
-                if (steps[i].type==='finding') {
-                    const group=[];
-                    while(i<steps.length && steps[i].type==='finding') { group.push(steps[i]); i++; }
-                    const totalW=group.length*NODE_W+(group.length-1)*50;
-                    const startX=cx-totalW/2;
-                    for(let fi=0;fi<group.length;fi++) {
-                        nodes.push({x:startX+fi*(NODE_W+50), y, w:NODE_W, h:NODE_H, step:group[fi], color:COLORS.finding});
-                    }
-                    y+=NODE_H+70;
-                } else {
-                    nodes.push({x:cx-NODE_W/2, y, w:NODE_W, h:NODE_H, step:steps[i], color:COLORS[steps[i].type]||COLORS.scan});
-                    y+=NODE_H+70;
-                    i++;
-                }
+    const NW=280,NH=130,GAP_X=100,GAP_Y=24;
+    function layoutNodes(steps){
+        const nodes=[];let x=40,i=0;
+        while(i<steps.length){
+            if(steps[i].type==='finding'){
+                const group=[];while(i<steps.length&&steps[i].type==='finding'){group.push(steps[i]);i++;}
+                const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
+                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.finding});
+                x+=NW+GAP_X;
+            }else if(steps[i].type==='verify'){
+                const group=[];while(i<steps.length&&steps[i].type==='verify'){group.push(steps[i]);i++;}
+                const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
+                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.verify});
+                x+=NW+GAP_X;
+            }else if(steps[i].type==='patch'){
+                const group=[];while(i<steps.length&&steps[i].type==='patch'){group.push(steps[i]);i++;}
+                const totalH=group.length*NH+(group.length-1)*GAP_Y;const startY=300-totalH/2;
+                for(let fi=0;fi<group.length;fi++)nodes.push({x,y:startY+fi*(NH+GAP_Y),w:NW,h:NH,step:group[fi],color:C.patch});
+                x+=NW+GAP_X;
+            }else{
+                nodes.push({x,y:300-NH/2,w:NW,h:NH,step:steps[i],color:C[steps[i].type]||C.scan});
+                x+=NW+GAP_X;i++;
             }
-            return nodes;
-        }
-        const nodes=layoutNodes(steps);
+        }return nodes;
+    }
+    function buildEdges(nodes){
+        const edges=[],cols=[];let lastX=-1;
+        for(const n of nodes){if(n.x!==lastX){cols.push([]);lastX=n.x;}cols[cols.length-1].push(n);}
+        for(let ci=1;ci<cols.length;ci++){for(const p of cols[ci-1])for(const c of cols[ci])edges.push([p,c]);}
+        return edges;
+    }
+    let steps,nodes,edges;
+    function rebuild(){steps=buildSteps(raw);nodes=layoutNodes(steps);edges=buildEdges(nodes);}
+    rebuild();
 
-        // ─── Edges: fan-out to findings, fan-in after ────────────────────
-        function buildEdges(nodes) {
-            const edges=[];
-            for(let i=0;i<nodes.length;i++) {
-                if(i===0) continue;
-                const prev=nodes[i-1], curr=nodes[i];
-                // Skip edges between parallel findings at same Y
-                if(prev.step.type==='finding'&&curr.step.type==='finding'&&prev.y===curr.y) continue;
-                // Fan-out: previous non-finding → all findings at this Y
-                if(prev.step.type!=='finding'&&curr.step.type==='finding') {
-                    const fy=curr.y;
-                    for(const n of nodes) if(n.step.type==='finding'&&n.y===fy) edges.push([prev,n]);
-                    continue;
-                }
-                // Fan-in: last finding row → next non-finding
-                if(prev.step.type==='finding'&&curr.step.type!=='finding') {
-                    const fy=prev.y;
-                    for(const n of nodes) if(n.step.type==='finding'&&n.y===fy) { if(!edges.find(e=>e[0]===n&&e[1]===curr)) edges.push([n,curr]); }
-                    continue;
-                }
-                edges.push([prev,curr]);
-            }
-            return edges;
-        }
-        const edges=buildEdges(nodes);
+    function clipText(text,maxW){if(!text)return'';if(ctx.measureText(text).width<=maxW)return text;let t=text;while(t.length>0&&ctx.measureText(t+'\u2026').width>maxW)t=t.slice(0,-1);return t+'\u2026';}
 
-        // ─── Render ──────────────────────────────────────────────────────
-        function resize() {
-            const rect=canvas.parentElement.getBoundingClientRect();
-            canvas.width=rect.width*dpr; canvas.height=rect.height*dpr;
-            canvas.style.width=rect.width+'px'; canvas.style.height=rect.height+'px';
-            ctx.setTransform(dpr,0,0,dpr,0,0); draw();
-        }
+    function resize(){const rect=canvas.parentElement.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;canvas.style.width=rect.width+'px';canvas.style.height=rect.height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);draw();}
 
-        function draw() {
-            const w=canvas.width/dpr, h=canvas.height/dpr;
-            ctx.save(); ctx.clearRect(0,0,w,h);
-            ctx.translate(offsetX,offsetY); ctx.scale(scale,scale);
+    function draw(){
+        const w=canvas.width/dpr,h=canvas.height/dpr;
+        ctx.save();ctx.clearRect(0,0,w,h);ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
+        for(const[a,b]of edges){const ax=a.x+a.w,ay=a.y+a.h/2,bx=b.x,by=b.y+b.h/2;ctx.beginPath();ctx.moveTo(ax,ay);const mx=(ax+bx)/2;ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.strokeStyle='#334155';ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-10,by-5);ctx.lineTo(bx-10,by+5);ctx.closePath();ctx.fillStyle='#475569';ctx.fill();}
+        for(const n of nodes){const c=n.color;ctx.save();ctx.shadowColor=c.border+'30';ctx.shadowBlur=20;ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,14);ctx.fillStyle=c.bg;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=c.border;ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,14);ctx.clip();const pad=14,textW=n.w-pad*2;ctx.font='700 13px -apple-system,BlinkMacSystemFont,sans-serif';ctx.fillStyle=c.title;ctx.textBaseline='top';ctx.fillText(clipText(n.step.title,textW),n.x+pad,n.y+pad);ctx.font='400 11px ui-monospace,monospace';const lineH=17;let ly=n.y+pad+22;const maxLines=Math.floor((n.h-pad*2-24)/lineH);for(let li=0;li<Math.min(n.step.lines.length,maxLines);li++){ctx.fillStyle=li===0?c.text:c.dim;ctx.fillText(clipText(n.step.lines[li],textW),n.x+pad,ly);ly+=lineH;}if(n.step.lines.length>maxLines){ctx.fillStyle=c.dim;ctx.fillText('+'+(n.step.lines.length-maxLines)+' more\u2026',n.x+pad,ly);}ctx.restore();}
+        ctx.restore();
+    }
 
-            // Edges
-            for(const[a,b]of edges) {
-                const ax=a.x+a.w/2,ay=a.y+a.h, bx=b.x+b.w/2,by=b.y;
-                ctx.beginPath(); ctx.moveTo(ax,ay);
-                const my=(ay+by)/2;
-                ctx.bezierCurveTo(ax,my,bx,my,bx,by);
-                ctx.strokeStyle='#475569'; ctx.lineWidth=2; ctx.stroke();
-                ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx-5,by-9); ctx.lineTo(bx+5,by-9); ctx.closePath(); ctx.fillStyle='#475569'; ctx.fill();
-            }
+    canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
+    canvas.addEventListener('mousemove',e=>{if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};draw();return;}const rect=canvas.getBoundingClientRect();const mx=(e.clientX-rect.left-offsetX)/scale,my=(e.clientY-rect.top-offsetY)/scale;let hit=null;for(const n of nodes){if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h){hit=n;break;}}if(hit){tooltip.innerHTML='<div class="font-semibold text-gray-100 mb-1">'+hit.step.title.replace(/</g,'&lt;')+'</div><div class="text-gray-300 space-y-0.5">'+hit.step.lines.map(l=>'<div>'+l.replace(/</g,'&lt;')+'</div>').join('')+'</div>';tooltip.style.left=(e.clientX-rect.left+16)+'px';tooltip.style.top=(e.clientY-rect.top-8)+'px';tooltip.classList.remove('hidden');canvas.style.cursor='pointer';}else{tooltip.classList.add('hidden');canvas.style.cursor='grab';}});
+    canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
+    canvas.addEventListener('mouseleave',()=>{dragging=false;tooltip.classList.add('hidden');});
+    canvas.addEventListener('wheel',e=>{e.preventDefault();const z=e.deltaY<0?1.12:0.88;scale*=z;scale=Math.max(0.2,Math.min(5,scale));draw();},{passive:false});
+    window.graphZoom=f=>{scale*=f;scale=Math.max(0.2,Math.min(5,scale));draw();};
+    window.graphReset=()=>{scale=1;const rect=canvas.parentElement.getBoundingClientRect();offsetX=30;offsetY=rect.height/2-300;draw();};
+    window.addEventListener('resize',resize);resize();
 
-            // Nodes
-            for(const n of nodes) {
-                const c=n.color;
-                ctx.shadowColor=c.glow+'50'; ctx.shadowBlur=18;
-                ctx.beginPath(); ctx.roundRect(n.x,n.y,n.w,n.h,12);
-                ctx.fillStyle=c.fill; ctx.fill(); ctx.shadowBlur=0;
-                ctx.strokeStyle=c.stroke; ctx.lineWidth=2; ctx.stroke();
-                // Icon dot
-                ctx.beginPath(); ctx.arc(n.x+20,n.y+22,8,0,Math.PI*2); ctx.fillStyle=c.stroke+'40'; ctx.fill();
-                ctx.beginPath(); ctx.arc(n.x+20,n.y+22,4,0,Math.PI*2); ctx.fillStyle=c.stroke; ctx.fill();
-                // Label
-                ctx.font='700 12px -apple-system,sans-serif'; ctx.fillStyle=c.text; ctx.textBaseline='top';
-                ctx.fillText(n.step.label.slice(0,28),n.x+36,n.y+14);
-                // Detail
-                ctx.font='400 10px -apple-system,sans-serif'; ctx.fillStyle='#94a3b8';
-                ctx.fillText((n.step.detail||'').slice(0,38),n.x+36,n.y+32);
-                // Sub
-                if(n.step.sub){ctx.font='400 9px ui-monospace,monospace';ctx.fillStyle='#64748b';ctx.fillText(n.step.sub.slice(0,44),n.x+36,n.y+48);}
-            }
-            ctx.restore();
-        }
-
-        // ─── Interaction ─────────────────────────────────────────────────
-        canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
-        canvas.addEventListener('mousemove',e=>{
-            if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};draw();}
-            else{const rect=canvas.getBoundingClientRect();const mx=(e.clientX-rect.left-offsetX)/scale,my=(e.clientY-rect.top-offsetY)/scale;let hit=null;for(const n of nodes){if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h){hit=n;break;}}if(hit){tooltip.innerHTML='<b class="text-gray-100 block mb-1">'+hit.step.label.replace(/</g,'&lt;')+'</b><span class="text-gray-300">'+(hit.step.tooltip||hit.step.detail||'').replace(/\n/g,'<br>').replace(/</g,'&lt;')+'</span>';tooltip.style.left=(e.clientX-rect.left+14)+'px';tooltip.style.top=(e.clientY-rect.top-10)+'px';tooltip.classList.remove('hidden');canvas.style.cursor='pointer';}else{tooltip.classList.add('hidden');canvas.style.cursor='grab';}}
-        });
-        canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
-        canvas.addEventListener('mouseleave',()=>{dragging=false;tooltip.classList.add('hidden');});
-        canvas.addEventListener('wheel',e=>{e.preventDefault();const z=e.deltaY<0?1.1:0.9;scale*=z;scale=Math.max(0.25,Math.min(4,scale));draw();},{passive:false});
-        window.graphZoom=f=>{scale*=f;scale=Math.max(0.25,Math.min(4,scale));draw();};
-        window.graphReset=()=>{scale=1;offsetX=0;offsetY=0;draw();};
-        window.addEventListener('resize',resize);
-        resize();
+    // Real-time polling: update graph live, only full reload on complete
+    if(JOB_STATUS!=='complete'&&JOB_STATUS!=='pending'){
+        const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};const nr=ag.tool_results||[];if(nr.length!==raw.length){raw=nr;rebuild();draw();}const tu=ag.token_usage;if(tu){const fmt=n=>(n||0).toLocaleString();const el=id=>document.getElementById(id);if(el('statTotal'))el('statTotal').textContent=fmt(tu.total_tokens);if(el('statPrompt'))el('statPrompt').textContent=fmt(tu.prompt_tokens);if(el('statComp'))el('statComp').textContent=fmt(tu.completion_tokens);if(el('statCalls'))el('statCalls').textContent=tu.llm_calls||0;if(el('statIter'))el('statIter').textContent=nr.length;}if(job.status==='complete'){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');setTimeout(()=>window.location.reload(),1500);}}catch(e){}},3000);
+    }
     })();
     </script>
 
-    {% else %}
-    <p class="text-gray-500 text-sm">No scan data yet</p>
-    {% endif %}
+    {% if not tool_results %}<p class="text-gray-500 text-sm mt-4">Graph will populate in real-time once the scan starts.</p>{% endif %}
 
-    <!-- Raw JSON (collapsed) -->
     {% if job.attack_graph_data %}
-    <details class="mt-4 group">
-        <summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-gray-400 hover:text-gray-300 transition-colors">
-            <svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            View Raw JSON
-        </summary>
-        <div class="mt-3">
-            <pre class="code-block bg-slate-900 border border-slate-700 p-4 rounded-lg overflow-x-auto text-sm max-h-96"><code class="text-green-300">{{ job.attack_graph_data | tojson(indent=2) }}</code></pre>
-        </div>
-    </details>
+    <details class="mt-4 group"><summary class="flex items-center gap-2 cursor-pointer list-none text-sm font-medium text-gray-400 hover:text-gray-300 transition-colors"><svg class="w-4 h-4 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>View Raw JSON</summary><div class="mt-3"><pre class="code-block bg-slate-900 border border-slate-700 p-4 rounded-lg overflow-x-auto text-sm max-h-96"><code class="text-green-300">{{ job.attack_graph_data | tojson(indent=2) }}</code></pre></div></details>
     {% endif %}
 </section>
 
@@ -511,12 +398,6 @@
 </section>
 
 <script>
-const JOB_ID = '{{ job.id }}';
-const CURRENT_STATUS = '{{ job.status }}';
-const POLL_INTERVAL_MS = 4000;
-const SLOW_THRESHOLD_MS = 60000;   // show 'taking longer…' after 60s
-const FORCE_RELOAD_MS  = 180000;  // hard reload after 3 min regardless
-
 // Start Scan button (shown for pending/ready jobs).
 const startJobBtn = document.getElementById('start-job-btn');
 if (startJobBtn) {
@@ -524,72 +405,11 @@ if (startJobBtn) {
         startJobBtn.disabled = true;
         startJobBtn.textContent = 'Starting...';
         try {
-            const resp = await fetch('/api/jobs/' + JOB_ID + '/start', {method: 'POST'});
-            if (resp.ok) {
-                window.location.reload();
-            } else {
-                const data = await resp.json();
-                alert('Could not start scan: ' + (data.detail || 'Unknown error'));
-                startJobBtn.disabled = false;
-                startJobBtn.textContent = 'Start Scan';
-            }
-        } catch (err) {
-            alert('Error: ' + err.message);
-            startJobBtn.disabled = false;
-            startJobBtn.textContent = 'Start Scan';
-        }
+            const resp = await fetch('/api/jobs/{{ job.id }}/start', {method: 'POST'});
+            if (resp.ok) { window.location.reload(); }
+            else { const data = await resp.json(); alert('Could not start scan: ' + (data.detail || 'Unknown error')); startJobBtn.disabled = false; startJobBtn.textContent = 'Start Scan'; }
+        } catch (err) { alert('Error: ' + err.message); startJobBtn.disabled = false; startJobBtn.textContent = 'Start Scan'; }
     });
-}
-
-// Live polling while the job is running.
-if (CURRENT_STATUS !== 'complete' && CURRENT_STATUS !== 'pending') {
-    const pollStart = Date.now();
-    const liveIndicator = document.getElementById('live-indicator');
-
-    // Force-reload safety net — catches cases where the status never
-    // changes but the job silently finished (e.g. report generated while
-    // FSM was still marked blue_team_remediation).
-    const forceReloadTimer = setTimeout(() => {
-        window.location.reload();
-    }, FORCE_RELOAD_MS);
-
-    // Show a softer 'taking longer than expected' message after 60 s so the
-    // user knows the system is still working, not frozen on Remediation.
-    const slowTimer = setTimeout(() => {
-        if (liveIndicator) {
-            liveIndicator.innerHTML = `
-                <span class="relative flex h-2.5 w-2.5 mr-2">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
-                </span>
-                <span class="text-amber-400 text-sm font-medium">Taking longer than usual…</span>`;
-        }
-    }, SLOW_THRESHOLD_MS);
-
-    const poll = setInterval(async () => {
-        try {
-            const resp = await fetch('/api/jobs/' + JOB_ID);
-            if (!resp.ok) return;
-            const job = await resp.json();
-
-            const statusChanged  = job.status !== CURRENT_STATUS;
-            // Also reload when the report key appears — finalize ran even if
-            // FSM status didn't flip yet (happens when generate_patch is slow).
-            const reportReady    = job.attack_graph_data &&
-                                   job.attack_graph_data.report &&
-                                   job.attack_graph_data.report.status === 'generated';
-            const nowComplete    = job.status === 'complete';
-
-            if (statusChanged || reportReady || nowComplete) {
-                clearInterval(poll);
-                clearTimeout(slowTimer);
-                clearTimeout(forceReloadTimer);
-                window.location.reload();
-            }
-        } catch (err) {
-            // Network blip — keep polling.
-        }
-    }, POLL_INTERVAL_MS);
 }
 </script>
 {% endblock %}
