@@ -110,8 +110,9 @@ if curl -fsSL --max-time 60 \
     else
         cd "$VSFTPD_DIR"
 
-        # Fix for modern glibc (libcrypt split out, PAM needs explicit link)
-        sed -i 's|^LIBS\s*=.*|& -lcrypt -lpam|' Makefile 2>/dev/null || true
+        # Fix for modern linkers: libcrypt, libpam, libcap, libssl all need
+        # explicit linking on modern distros (they used to be pulled implicitly).
+        sed -i 's|^LIBS\s*=.*|& -lcrypt -lpam -lcap -lssl|' Makefile 2>/dev/null || true
 
         if make -j"$(nproc)" 2>&1 | tail -3; then
             cp vsftpd /usr/local/sbin/vsftpd_234
