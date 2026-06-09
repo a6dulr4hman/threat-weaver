@@ -80,6 +80,8 @@ class LLMClient:
         self.model = K2_MODEL
         self.timeout = REQUEST_TIMEOUT
         self.max_tokens = MAX_TOKENS
+        # Token usage from the most recent API call (populated after each chat()).
+        self.last_usage: dict = {}
 
     def token_guard(self, messages: list[dict], max_tokens: int = MAX_TOKENS) -> list[dict]:
         """
@@ -141,6 +143,10 @@ class LLMClient:
 
         Enforces the global 30 requests/minute rate limit, applies the 60k
         token guard, and uses a 120s request timeout.
+
+        After each successful call, self.last_usage is populated with the API's
+        reported token counts: {"prompt_tokens": N, "completion_tokens": N,
+        "total_tokens": N}.
         """
         # Apply token guard preserving message structure.
         messages = self.token_guard(messages, self.max_tokens)
@@ -159,6 +165,7 @@ class LLMClient:
             "stream": False,
         }
 
+        self.last_usage = {}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
@@ -169,6 +176,8 @@ class LLMClient:
                 if resp.status_code != 200:
                     return f"Error: API returned status {resp.status_code}"
                 data = resp.json()
+                # Track token usage from the API response.
+                self.last_usage = data.get("usage") or {}
                 return self._extract_content(data)
         except httpx.TimeoutException:
             return "Error: Request timed out (120s limit)"

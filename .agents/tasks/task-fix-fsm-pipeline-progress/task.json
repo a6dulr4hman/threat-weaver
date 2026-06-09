@@ -1,0 +1,14 @@
+{
+  "task_id": "task-fix-fsm-pipeline-progress",
+  "task_description": "Fix the FSM pipeline display so it represents overall scan progress (never goes backwards) instead of per-vulnerability-iteration state. Introduce a forward-only high-water-mark (pipeline_phase) on the job model that the front end renders, while keeping the internal FSM state for orchestrator logic.",
+  "status": "completed",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "All 126 tests pass (123 original + 3 new). Lint clean. New tests cover non-regression, persistence, and advance-to-complete scenarios."
+  }
+}

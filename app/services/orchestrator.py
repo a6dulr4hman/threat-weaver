@@ -247,6 +247,18 @@ class OrchestratorFSM:
                 async with self._semaphore:
                     decision = await agent.decide(context)
 
+                # Accumulate token usage from this LLM call.
+                usage = getattr(self.llm_client, "last_usage", None)
+                if isinstance(usage, dict) and usage:
+                    totals = self.attack_graph.setdefault("token_usage", {
+                        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                        "llm_calls": 0,
+                    })
+                    totals["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
+                    totals["completion_tokens"] += usage.get("completion_tokens", 0) or 0
+                    totals["total_tokens"] += usage.get("total_tokens", 0) or 0
+                    totals["llm_calls"] += 1
+
                 action = decision.get("action")
 
                 if action == "complete":

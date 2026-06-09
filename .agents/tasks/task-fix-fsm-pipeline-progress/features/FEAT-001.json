@@ -1,0 +1,36 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Fix the FSM pipeline to represent overall scan progress (never goes backwards) instead of per-iteration state. Introduce a high-water-mark field (pipeline_phase) on the AnalysisJob model that only moves forward. Change _maybe_advance_state to update the high-water-mark instead of the old per-tool state. Change the front end template to display pipeline_phase for the visual pipeline stepper. Keep job.status for internal orchestrator state tracking but use pipeline_phase for display.",
+  "status": "completed",
+  "steps": [
+    "1. In app/models.py: Add a new column `pipeline_phase` to AnalysisJob (String(50), nullable=True, default='ready'). This is the forward-only high-water-mark that the UI will display.",
+    "2. In app/services/orchestrator.py: Add a new field `self.pipeline_phase: FSMState = FSMState.READY` to OrchestratorFSM.__init__. In hydrate_state(), load pipeline_phase from the job row (fall back to job.status if pipeline_phase is None for backwards compat). In save_state(), persist self.pipeline_phase to job.pipeline_phase.",
+    "3. In app/services/orchestrator.py _maybe_advance_state(): Instead of calling self.transition(valid_next[0]) which changes self.state (the internal orchestrator state), change the logic to: (a) compute the target_state from the tool_to_min_state map, (b) compare target_state's ordinal position vs self.pipeline_phase's ordinal position using the FSM_ORDER list [READY, RECON, DAST_TESTING, POC_VERIFICATION, BLUE_TEAM_REMEDIATION, COMPLETE], (c) if target_state is AHEAD of current pipeline_phase, update self.pipeline_phase to target_state. ALSO still do self.transition(valid_next[0]) for the internal state as before, so the orchestrator's FSM logic is unchanged.",
+    "4. In app/services/orchestrator.py _advance_to_complete(): After advancing FSM to COMPLETE, also set self.pipeline_phase = FSMState.COMPLETE (since the scan is done, the pipeline should show complete).",
+    "5. In app/services/orchestrator.py save_state(): Persist pipeline_phase to the job row: job.pipeline_phase = self.pipeline_phase.value.",
+    "6. In app/services/orchestrator.py hydrate_state(): Load pipeline_phase from job: self.pipeline_phase = FSMState(job.pipeline_phase) if job.pipeline_phase else self.state.",
+    "7. In app/schemas.py JobResponse: Add pipeline_phase: Optional[str] = None field so the API returns it.",
+    "8. In app/templates/job_detail.html: Change the pipeline stepper logic. Instead of using `job.status` to determine current_index, use `job.pipeline_phase or job.status`. Specifically change: `{% set current_index = states.index(job.status) if job.status in states else 0 %}` to `{% set display_phase = job.pipeline_phase if job.pipeline_phase else job.status %}` and `{% set current_index = states.index(display_phase) if display_phase in states else 0 %}`.",
+    "9. In app/templates/job_detail.html: The 'live indicator' badge logic (checking if status is 'complete' or 'pending') should still use job.status since that's the real internal state. Only the pipeline stepper visual uses pipeline_phase.",
+    "10. In tests/test_orchestrator.py: Update existing tests that assert fsm.state changes to also verify fsm.pipeline_phase advances forward. Add a new test `test_pipeline_phase_never_regresses` that simulates a multi-vulnerability scan: call _maybe_advance_state with run_nmap, then send_http_request, then generate_patch (reaching BLUE_TEAM_REMEDIATION in pipeline_phase), then call _maybe_advance_state with run_nmap again (simulating next iteration) and assert pipeline_phase stays at BLUE_TEAM_REMEDIATION (does not regress to RECON).",
+    "11. In tests/test_orchestrator.py: Add a test `test_pipeline_phase_persisted` that creates a job, runs a few tool advances, calls save_state(), reloads from DB, and verifies pipeline_phase was persisted correctly.",
+    "12. Run lint and tests to verify everything passes: /root/.pyenv/versions/3.11.15/bin/python -m ruff check app/ tests/ && /root/.pyenv/versions/3.11.15/bin/python -m pytest -q"
+  ],
+  "acceptance_criteria": [
+    "pipeline_phase column exists on AnalysisJob model",
+    "pipeline_phase only moves forward through the FSM states, never backwards",
+    "_maybe_advance_state updates pipeline_phase as a high-water-mark",
+    "The job_detail.html template pipeline stepper uses pipeline_phase (or falls back to status) for display",
+    "The API response (JobResponse schema) includes pipeline_phase",
+    "A test proves pipeline_phase does not regress when tools from earlier phases run again",
+    "All existing tests continue to pass",
+    "Lint passes"
+  ],
+  "verification": [
+    "/root/.pyenv/versions/3.11.15/bin/python -m ruff check app/ tests/",
+    "/root/.pyenv/versions/3.11.15/bin/python -m pytest -q"
+  ],
+  "blocked_reason": null,
+  "findings": "All 126 tests pass (3 new tests added). Lint clean. The pipeline_phase field is a pure additive change - no existing behavior was modified. The internal FSM state (self.state / job.status) continues to work as before for orchestrator logic."
+}
