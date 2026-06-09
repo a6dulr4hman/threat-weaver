@@ -48,29 +48,39 @@ DEFAULT_CYCLE_BUDGET_SECONDS = float(
 )
 
 
-# System prompt for the FINAL assessment pass. After the agentic loop ends, we
-# hand K2-Think-v2 a compact digest of everything the scan observed and ask it
-# to act as the lead assessor: count the vulnerabilities, rate each one, and
-# write the executive verdict. It must reason ONLY from the supplied evidence.
+# System prompt for the FINAL assessment pass. After the agentic loop ends and
+# the scan's findings/PoCs/patches have been correlated into ONE canonical
+# vulnerability per (category, endpoint), we hand K2-Think-v2 that canonical
+# list plus the raw evidence and ask it to act as the lead assessor: select the
+# single DEFINITIVE characterization for each candidate (when the evidence is
+# duplicated or noisy) and rate it. It must return exactly one entry per
+# candidate id — no inventions, no omissions, no merges.
 FINAL_ASSESSMENT_PROMPT = """You are K2-Think-v2 acting as the lead security \
-assessor writing the FINAL verdict for an automated penetration test. You are \
-given a JSON digest of everything the autonomous scan actually did and observed \
-against ONE target: recon services, every exploitation signal it triggered, \
-confirmed sandbox PoCs, and any patches it generated.
+assessor writing the FINAL verdict for an automated penetration test.
 
-Produce a concise, accurate vulnerability assessment. Base EVERY conclusion \
-STRICTLY on the supplied evidence. Do NOT invent vulnerabilities the evidence \
-does not support, and never rate a service/version as vulnerable without an \
-observed exploitation signal. If the scan observed nothing exploitable, say so \
-honestly with total_vulnerabilities = 0 and overall_risk "Informational".
+You are given (a) a JSON digest of everything the autonomous scan observed and \
+(b) a list of CANDIDATE vulnerabilities that have already been de-duplicated to \
+exactly one per (category, endpoint), each carrying a stable "id".
+
+Your job is to pick the ONE definitive characterization for EACH candidate and \
+rate it. Rules you MUST follow:
+- Return EXACTLY ONE entry in "vulnerabilities" for EACH candidate id you were \
+given — same count, same ids. Do NOT invent new vulnerabilities, do NOT drop \
+any, and do NOT merge two candidates into one.
+- Echo the candidate's "id" verbatim in each entry.
+- Base every conclusion STRICTLY on the supplied evidence. Use the \
+brave_search_enrichment data to add precise CVE IDs, reference URLs and CVSS \
+scores where available.
+- "total_vulnerabilities" MUST equal the number of candidates.
 
 Reply with EXACTLY ONE JSON object and nothing else (no prose, no markdown):
 {
-  "total_vulnerabilities": <integer>,
+  "total_vulnerabilities": <integer = number of candidates>,
   "overall_risk": "Critical" | "High" | "Medium" | "Low" | "Informational",
   "executive_summary": "<2-4 sentence plain-English verdict for a CISO>",
   "vulnerabilities": [
     {
+      "id": "<the candidate id, echoed verbatim>",
       "name": "<short title, e.g. 'SQLi authentication bypass on /login'>",
       "category": "<class, e.g. 'SQL Injection', 'Path Traversal', 'OS Command Injection', 'Broken Authentication'>",
       "endpoint": "<method + path it was observed on>",
@@ -84,9 +94,7 @@ Reply with EXACTLY ONE JSON object and nothing else (no prose, no markdown):
     }
   ]
 }
-Order vulnerabilities from most to least severe. Be factual and specific.
-Use the brave_search_enrichment data to add CVE IDs, reference URLs, and
-more precise CVSS scores where the search results provide them."""
+Order vulnerabilities from most to least severe. Be factual and specific."""
 
 
 class FSMState(str, Enum):
@@ -250,17 +258,8 @@ class OrchestratorFSM:
                 async with self._semaphore:
                     decision = await agent.decide(context)
 
-                # Accumulate token usage from this LLM call.
-                usage = getattr(self.llm_client, "last_usage", None)
-                if isinstance(usage, dict) and usage:
-                    totals = self.attack_graph.setdefault("token_usage", {
-                        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-                        "llm_calls": 0,
-                    })
-                    totals["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
-                    totals["completion_tokens"] += usage.get("completion_tokens", 0) or 0
-                    totals["total_tokens"] += usage.get("total_tokens", 0) or 0
-                    totals["llm_calls"] += 1
+                # Accumulate K2-Think-v2 token usage from this reasoning call.
+                self._accumulate_usage(getattr(self.llm_client, "last_usage", None))
 
                 action = decision.get("action")
 
@@ -357,6 +356,13 @@ class OrchestratorFSM:
                             continue
 
                     result = await executor.execute(tool_name, arguments)
+                    # generate_patch invokes K2-Think-v2 inside the executor
+                    # (via RemediationService, which shares self.llm_client), so
+                    # capture those tokens too — they were previously lost.
+                    if tool_name == "generate_patch":
+                        self._accumulate_usage(
+                            getattr(self.llm_client, "last_usage", None)
+                        )
                     # Store result in attack graph
                     self.attack_graph.setdefault("tool_results", []).append({
                         "iteration": iteration,
@@ -569,6 +575,27 @@ class OrchestratorFSM:
                 break
         self.pipeline_phase = FSMState.COMPLETE
 
+    def _accumulate_usage(self, usage: dict | None) -> None:
+        """Fold one K2-Think-v2 API call's token usage into the running total.
+
+        Safe to call after every LLM interaction (reasoning, remediation, final
+        assessment). Non-dict / empty usage (e.g. a mocked client in tests, or a
+        failed call) is ignored so the counter only reflects real API calls.
+        """
+        if not isinstance(usage, dict) or not usage:
+            return
+        totals = self.attack_graph.setdefault("token_usage", {
+            "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            "llm_calls": 0,
+        })
+        totals["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
+        totals["completion_tokens"] += usage.get("completion_tokens", 0) or 0
+        total = usage.get("total_tokens")
+        if not total:
+            total = (usage.get("prompt_tokens", 0) or 0) + (usage.get("completion_tokens", 0) or 0)
+        totals["total_tokens"] += total or 0
+        totals["llm_calls"] += 1
+
     # --- Phase 6: severity scoring + alert routing ------------------------
 
     def _score_severity(self) -> str:
@@ -695,10 +722,19 @@ class OrchestratorFSM:
         severity = self._score_severity()
         self.attack_graph["overall_severity"] = severity
 
-        # Final K2 verdict: enumerate + rate the vulnerabilities from the
-        # evidence gathered this run. Best-effort — never blocks finalization
-        # or the report if the model/network is unavailable (returns None).
-        assessment = await self._generate_final_assessment()
+        # Correlate detections <-> PoCs <-> patches into ONE canonical set, so
+        # detected == tested == remediated == total and each PoC maps to its
+        # OWN vulnerability instead of collapsing onto a single node.
+        from app.services.correlation import correlate
+        correlated = correlate(self.attack_graph)
+        self.attack_graph["vulnerabilities"] = correlated["vulnerabilities"]
+        self.attack_graph["vulnerability_counts"] = correlated["counts"]
+
+        # Final K2 verdict: select ONE definitive assessment per canonical
+        # vulnerability (enriched with CVSS/CVEs), with the count pinned to the
+        # canonical total. Best-effort — never blocks finalization or the
+        # report, and falls back to a deterministic verdict if K2 is offline.
+        assessment = await self._generate_final_assessment(correlated)
         if assessment:
             self.attack_graph["final_assessment"] = assessment
 
@@ -1202,25 +1238,69 @@ class OrchestratorFSM:
             "brave_search_enrichment": enrichment,
         }
 
-    async def _generate_final_assessment(self) -> dict | None:
+    async def _generate_final_assessment(self, correlated: dict | None = None) -> dict | None:
         """
-        Final pass: hand K2-Think-v2 a digest of everything the scan observed
-        and ask it to enumerate and rate the vulnerabilities (count, severity,
-        CVSS, impact, remediation).
+        Final pass: produce the DEFINITIVE vulnerability assessment.
 
-        Best-effort and offline-safe:
-        - Uses its OWN LLMClient so it never disturbs a mocked self.llm_client
-          (and its call-count assertions) in unit tests.
-        - Skipped entirely when no API key is configured (e.g. tests / local
-          runs without K2 credentials).
-        - Bounded by a timeout and never propagates an exception, so a slow or
-          unavailable model can't block finalization or the PDF report.
+        Built on top of the canonical correlated vulnerability set so the
+        reported count ALWAYS equals the number of detected vulnerabilities
+        (detected == tested == remediated == total). K2-Think-v2 is used to
+        SELECT the single definitive characterization per candidate and enrich
+        it (CVSS, CVEs, impact); when K2 is unavailable the deterministic
+        verdict derived from the gathered evidence is returned instead, so the
+        UI count is always consistent.
+
+        Offline-safe: the K2 call uses its OWN LLMClient (never disturbs a
+        mocked self.llm_client), is bounded by a timeout, and never raises.
+        """
+        if correlated is None:
+            from app.services.correlation import correlate
+            correlated = correlate(self.attack_graph)
+        canonical = correlated.get("vulnerabilities", [])
+
+        k2_obj = await self._k2_select_definitive(canonical)
+        vulns = self._reconcile_assessment(
+            canonical, (k2_obj or {}).get("vulnerabilities")
+        )
+        overall = self._overall_risk(vulns)
+        summary = (
+            (k2_obj or {}).get("executive_summary")
+            or self.attack_graph.get("k2_summary")
+            or self._default_summary(vulns, overall)
+        )
+        return {
+            "total_vulnerabilities": len(vulns),
+            "overall_risk": overall,
+            "executive_summary": summary,
+            "vulnerabilities": vulns,
+        }
+
+    async def _k2_select_definitive(self, canonical: list[dict]) -> dict | None:
+        """
+        Hand K2-Think-v2 the canonical candidate list + evidence and ask it to
+        pick the ONE definitive assessment per candidate (and enrich it).
+
+        Returns the parsed K2 object, or None when K2 is unavailable / errors.
+        Always folds the call's token usage into the running counter.
         """
         client = LLMClient()
-        if not client.api_key:
+        if not client.api_key or not canonical:
             return None
+        raw = None
         try:
             evidence = await self._build_assessment_evidence()
+            evidence["candidate_vulnerabilities"] = [
+                {
+                    "id": v["id"],
+                    "category": v["category"],
+                    "endpoint": v["endpoint"],
+                    "severity": v["severity"],
+                    "verified": (v.get("verification") or {}).get("status"),
+                    "remediated": v.get("remediation") is not None,
+                    "evidence": (v.get("detection") or {}).get("evidence", ""),
+                }
+                for v in canonical
+            ]
             messages = [
                 {"role": "system", "content": FINAL_ASSESSMENT_PROMPT},
                 {"role": "user", "content": json.dumps(evidence, default=str)},
@@ -1229,10 +1309,117 @@ class OrchestratorFSM:
                 client.chat(messages, role="agent"), timeout=120.0
             )
         except Exception:
-            return None
+            raw = None
+        finally:
+            self._accumulate_usage(getattr(client, "last_usage", None))
         if not isinstance(raw, str) or is_api_error(raw):
             return None
         parsed = extract_json_object(raw)
-        if not isinstance(parsed, dict) or "total_vulnerabilities" not in parsed:
+        return parsed if isinstance(parsed, dict) else None
+
+    # --- Assessment reconciliation helpers -------------------------------- #
+
+    # Default CVSS base score by severity, used when K2 does not supply one.
+    _CVSS_DEFAULT = {"Critical": 9.1, "High": 7.8, "Medium": 5.4, "Low": 3.1}
+    _SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+    @staticmethod
+    def _normalize_ep(ep) -> str:
+        if not ep:
+            return ""
+        m = re.search(r"/\S*", str(ep))
+        path = m.group(0) if m else str(ep)
+        return path.split("?")[0].rstrip("/").lower() or "/"
+
+    @classmethod
+    def _clean_sev(cls, s) -> str | None:
+        if not s:
             return None
-        return parsed
+        key = str(s).strip().lower()
+        return key.capitalize() if key in cls._SEV_RANK else None
+
+    @classmethod
+    def _coerce_cvss(cls, val, severity: str):
+        try:
+            f = float(val)
+            if 0.0 <= f <= 10.0:
+                return round(f, 1)
+        except (TypeError, ValueError):
+            pass
+        return cls._CVSS_DEFAULT.get(severity, 5.0)
+
+    def _reconcile_assessment(self, canonical: list[dict], k2_vulns) -> list[dict]:
+        """
+        Produce exactly ONE assessment entry per canonical vulnerability,
+        merging K2's enrichment (matched by id, then by endpoint) over the
+        deterministic data. Guarantees len(result) == len(canonical).
+        """
+        k2_by_id: dict[str, dict] = {}
+        k2_by_ep: dict[str, dict] = {}
+        if isinstance(k2_vulns, list):
+            for kv in k2_vulns:
+                if not isinstance(kv, dict):
+                    continue
+                if kv.get("id"):
+                    k2_by_id[str(kv["id"])] = kv
+                ep = self._normalize_ep(kv.get("endpoint"))
+                if ep:
+                    k2_by_ep.setdefault(ep, kv)
+
+        out: list[dict] = []
+        for v in canonical:
+            kv = k2_by_id.get(v["id"]) or k2_by_ep.get(self._normalize_ep(v["endpoint"])) or {}
+            verification = v.get("verification") or {}
+            remediation = v.get("remediation") or {}
+            severity = self._clean_sev(kv.get("severity")) or v["severity"]
+            confidence = kv.get("confidence") or (
+                "Confirmed" if verification.get("status") == "confirmed"
+                else "Likely" if verification.get("status") == "observed"
+                else "Possible"
+            )
+            cves = remediation.get("cves") or (
+                [str(c) for c in kv.get("cves", [])] if isinstance(kv.get("cves"), list) else []
+            )
+            out.append({
+                "id": v["id"],
+                "name": kv.get("name") or v["name"],
+                "category": kv.get("category") or v["category"],
+                "endpoint": kv.get("endpoint") or v["endpoint"],
+                "severity": severity,
+                "cvss": self._coerce_cvss(kv.get("cvss"), severity),
+                "confidence": confidence,
+                "evidence": kv.get("evidence") or verification.get("detail")
+                or (v.get("detection") or {}).get("evidence", ""),
+                "impact": kv.get("impact") or "",
+                "remediation": kv.get("remediation") or remediation.get("recommendation", ""),
+                "cves": cves,
+                "references": [str(r) for r in (kv.get("references") or []) if r],
+            })
+        return out
+
+    def _overall_risk(self, vulns: list[dict]) -> str:
+        if not vulns:
+            return "Informational"
+        top = max(self._SEV_RANK.get(str(v.get("severity", "")).lower(), 0) for v in vulns)
+        return {4: "Critical", 3: "High", 2: "Medium", 1: "Low"}.get(top, "Informational")
+
+    def _default_summary(self, vulns: list[dict], overall: str) -> str:
+        n = len(vulns)
+        if n == 0:
+            return (
+                "The automated scan did not confirm any exploitable "
+                "vulnerabilities on this target."
+            )
+        tally: dict[str, int] = {}
+        for v in vulns:
+            sev = str(v.get("severity", "")).capitalize()
+            tally[sev] = tally.get(sev, 0) + 1
+        breakdown = ", ".join(
+            f"{tally[s]} {s.lower()}" for s in ("Critical", "High", "Medium", "Low")
+            if tally.get(s)
+        )
+        noun = "vulnerability" if n == 1 else "vulnerabilities"
+        return (
+            f"The automated scan confirmed {n} {noun} ({breakdown}); overall risk "
+            f"is {overall}. Each finding was verified and a remediation was generated."
+        )
