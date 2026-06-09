@@ -260,21 +260,7 @@
             <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#fbbf24"></span>PoC</span>
             <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#4ade80"></span>Patch</span>
         </div>
-        <p class="absolute bottom-3 left-3 z-20 text-[10px] text-ink-500">Drag to pan &middot; scroll to zoom &middot; click a node for details</p>
-
-        <!-- True modal: opened on node click -->
-        <div id="graphModal" class="hidden absolute inset-0 z-40 flex items-center justify-center p-6">
-            <div id="graphModalBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
-            <div class="relative z-10 w-full max-w-lg max-h-[90%] overflow-y-auto rounded-xl border border-white/15 bg-ink-950 shadow-2xl">
-                <div class="flex items-start justify-between gap-4 px-5 py-4 border-b border-white/10 sticky top-0 bg-ink-950">
-                    <h3 id="graphModalTitle" class="text-sm font-semibold text-white leading-snug"></h3>
-                    <button onclick="closeGraphModal()" class="flex-shrink-0 text-ink-300 hover:text-white transition-colors" aria-label="Close">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </button>
-                </div>
-                <div id="graphModalBody" class="px-5 py-4 text-sm text-ink-100 space-y-4"></div>
-            </div>
-        </div>
+        <p class="absolute bottom-3 left-3 z-20 text-[10px] text-ink-500">Drag to pan &middot; scroll to zoom</p>
     </div>
 
     <script>
@@ -284,17 +270,80 @@
     let VULNS={{ ((job.attack_graph_data.vulnerabilities or []) if job.attack_graph_data else []) | tojson }} || [];
     const canvas=document.getElementById('attackGraphCanvas');
     const ctx=canvas.getContext('2d');
-    const modal=document.getElementById('graphModal');
     const dpr=window.devicePixelRatio||1;
-    let scale=1,offsetX=40,offsetY=40,dragging=false,moved=false,lastMouse={x:0,y:0},downPos={x:0,y:0},hoverNode=null;
-    const NODE_BG='#0a0a0a',NODE_BG2='#0e0e0e',BORDER='rgba(255,255,255,0.10)',BORDER_HI='rgba(255,255,255,0.40)';
-    const TITLE='#fafafa',BODY='#bdbdbd',DIM='#7a7a7a';
+    let scale=1,offsetX=40,offsetY=40,dragging=false,lastMouse={x:0,y:0},hoverNode=null;
+    const NODE_BG='#0a0a0a',NODE_BG2='#111214';
+    const TITLE='#fafafa',BODY='#cfcfcf',DIM='#8a8a8a';
     const ACCENT={recon:'#22d3ee',scan:'#3b82f6',finding:'#f87171',verify:'#fbbf24',patch:'#4ade80'};
+    function hexA(h,a){const n=parseInt(h.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
 
-    function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
-    function sevClass(s){return {critical:'badge-red',high:'badge-orange',medium:'badge-yellow',low:'badge-green'}[(s||'').toLowerCase()]||'badge-neutral';}
+    // ============================================================ //
+    //  Client-side correlation (mirrors app/services/correlation.py)
+    //  so the graph ALWAYS shows detection -> PoC -> patch lanes,
+    //  even for jobs whose stored data predates the server-side
+    //  correlation, and live while a scan is still running.
+    // ============================================================ //
+    const LABEL={
+        auth_bypass:{cat:'Broken Authentication',title:'SQL injection authentication bypass',sev:'High'},
+        sensitive_file_disclosure:{cat:'Path Traversal',title:'Path traversal / file disclosure',sev:'High'},
+        os_command_execution:{cat:'OS Command Injection',title:'OS command injection',sev:'Critical'},
+        server_error:{cat:'Injection',title:'Server-side error / crash',sev:'High'},
+        fuzz_anomaly:{cat:'Injection',title:'Anomalous response to crafted input',sev:'Medium'},
+        vulnerable_service:{cat:'Vulnerable Service',title:'Known-vulnerable network service',sev:'Critical'}
+    };
+    const RANK={critical:4,high:3,medium:2,low:1,informational:0};
+    const CAT_KW={
+        'Broken Authentication':['login','auth','sqli','sql','signin','bypass','credential'],
+        'SQL Injection':['sql','sqli','injection'],
+        'Path Traversal':['traversal','lfi','path','download','file','directory'],
+        'OS Command Injection':['command','cmd','rce','exec','shell','diagnostics','ping','backup'],
+        'Vulnerable Service':['ftp','vsftpd','backdoor','ssh','smb','service','telnet'],
+        'Injection':['injection','inject']
+    };
+    const HINTS=['ftp','vsftpd','backdoor','6200','smb','telnet'];
+    const INJ=["'",'"','--','/*','#',';',' or ',' union ',' and '];
+    function svcLike(x){x=(x||'').toLowerCase();return HINTS.some(h=>x.includes(h));}
+    function normPath(raw){if(!raw)return'/';let s=(raw+'').split('?')[0].split('#')[0];if(s.includes('://')){s=s.split('://')[1];const i=s.indexOf('/');s=i!==-1?s.slice(i):'/';}if(!s.startsWith('/'))s='/'+s;return s.replace(/\/+$/,'')||'/';}
+    function toks(p){return (p||'').toLowerCase().split(/[^a-z0-9]+/).filter(t=>t.length>=3);}
+    function anomaly(r){return !!(r.is_server_error||r.stack_trace_detected||r.anomalies_found||r.server_crash_suspected);}
+    function fileDisc(b){b=(b||'').toLowerCase();return b.includes('root:x:0:0:')||b.includes('root:!:0:0:')||(b.includes('daemon:x:')&&b.includes('nologin'))||(b.includes('-----begin')&&b.includes('private key-----'));}
+    function cmdOut(b){if(!b)return false;if(/uid=\d+\([\w.-]+\)\s+gid=\d+\(/.test(b))return true;const l=b.toLowerCase();return l.includes('bytes from')&&(l.includes('icmp_seq=')||l.includes('ttl='));}
+    function authBypass(a,r){const ep=((a.endpoint||a.url||'')+'').toLowerCase();if(!['login','signin','sign-in','auth'].some(t=>ep.includes(t)))return false;let creds={};for(const s of[a.form_data,a.json_body,a.params]){if(s&&typeof s==='object')Object.assign(creds,s);}const blob=Object.values(creds).join(' ').toLowerCase();if(!blob||!INJ.some(m=>blob.includes(m)))return false;if(![200,301,302,303,307,308].includes(r.status_code))return false;const b=(r.body||'').toLowerCase();if(['invalid','incorrect','failed','try again'].some(f=>b.includes(f)))return false;if(['logout','sign out','signout','dashboard'].some(s=>b.includes(s)))return true;const loc=((r.response_headers||{}).location||'').toLowerCase();return !!(loc&&!loc.includes('login'));}
+    function classify(tool,a,r){if(!['send_http_request','run_fuzzer'].includes(tool)||!r)return null;if(anomaly(r))return r.anomalies_found?'fuzz_anomaly':'server_error';const b=r.body||'';if(fileDisc(b))return'sensitive_file_disclosure';if(cmdOut(b))return'os_command_execution';if(authBypass(a||{},r))return'auth_bypass';return null;}
+    function cleanEvidence(r){const t=r.telemetry||'';if(t)return t;const b=r.body||'';return /<!doctype|<html/i.test(b)?'':b;}
 
-    // --- Recon node from raw tool_results (shared by both render modes) --- //
+    function correlateClient(entries){
+        const dets=[],byKey={},pocs=[],patches=[],svcs=[];
+        function ensureDet(cat,ep,lab,det){const key=cat+'|'+ep;if(byKey[key])return byKey[key];const m=LABEL[lab]||{cat,title:'Security finding',sev:'Medium'};const o={name:m.title,category:cat,endpoint:ep,severity:m.sev,detection:det,verification:null,remediation:null};dets.push(o);byKey[key]=o;return o;}
+        for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{},reason=e.reasoning||'';if(!r||typeof r!=='object')continue;
+            if(t==='run_nmap'){for(const s of(r.results||[]))svcs.push(s);continue;}
+            if(t==='send_http_request'||t==='run_fuzzer'){const lab=classify(t,a,r);if(!lab)continue;const ep=normPath(a.endpoint||a.url||'/');ensureDet(LABEL[lab].cat,ep,lab,{method:a.method||(t==='run_fuzzer'?'FUZZ':'GET'),status:r.status_code,evidence:cleanEvidence(r).slice(0,280),reasoning:reason});continue;}
+            if(t==='execute_safe_poc'){pocs.push({sandbox_id:(a.sandbox_id||'').trim(),confirmed:!!r.exploit_confirmed,detail:(r.match_detail||r.trace||'').slice(0,200),reasoning:reason});continue;}
+            if(t==='generate_patch'&&!r.error){patches.push({vuln_node:(a.vuln_node||'').trim(),risk_level:r.risk_level||'High',cves:r.cves||[],recommendation:r.recommendation||'',description:r.description||'',code:r.patch||'',reasoning:reason});continue;}
+        }
+        // Network-service detection (vsftpd backdoor etc.) from nmap/PoC/patch.
+        if(!dets.some(d=>d.category==='Vulnerable Service')){
+            let lbl=null;for(const s of svcs){const v=(s.version||'')+'';if(s.service==='ftp'&&v.includes('2.3')){lbl='ftp '+v;break;}}
+            const pS=pocs.find(p=>p.confirmed&&svcLike(p.reasoning+' '+p.sandbox_id));
+            const ptS=patches.find(p=>svcLike(p.vuln_node+' '+p.reasoning));
+            if(lbl||pS||ptS){const ep=(lbl&&lbl.includes('ftp'))?'FTP :21':'Network service';ensureDet('Vulnerable Service',ep,'vulnerable_service',{method:'TCP',status:null,evidence:lbl||(pS&&pS.detail)||'',reasoning:(pS||ptS||{}).reasoning||''});}
+        }
+        function bestMatch(text,wantSvc){text=(text||'').toLowerCase();let best=null,bs=0;for(const d of dets){const isS=d.category==='Vulnerable Service';let sc=0;if(wantSvc&&isS)sc+=3;for(const tk of toks(normPath(d.endpoint))){if(tk&&text.includes(tk))sc+=3;}for(const kw of(CAT_KW[d.category]||[])){if(text.includes(kw))sc+=1;}if(sc>bs){best=d;bs=sc;}}return bs>0?best:null;}
+        // One definitive verification per vuln (confirmed beats failed).
+        const used=new Set();
+        pocs.map((p,i)=>[i,p]).sort((x,y)=>(x[1].confirmed?0:1)-(y[1].confirmed?0:1)).forEach(([i,p])=>{const want=svcLike(p.reasoning+' '+p.sandbox_id);const d=bestMatch(p.reasoning+' '+p.sandbox_id,want);if(!d)return;if(d.verification&&d.verification.status==='confirmed'&&!p.confirmed)return;d.verification={status:p.confirmed?'confirmed':'failed',method:'sandbox_poc',sandbox_id:p.sandbox_id,detail:p.detail};used.add(i);});
+        const leftPoc=pocs.filter((p,i)=>!used.has(i)&&p.confirmed);
+        for(const d of dets){if(!d.verification&&leftPoc.length){const p=leftPoc.shift();d.verification={status:'confirmed',method:'sandbox_poc',sandbox_id:p.sandbox_id,detail:p.detail};}}
+        for(const d of dets){if(!d.verification)d.verification={status:'observed',method:'live_exploitation',sandbox_id:'',detail:d.detection.evidence||'Confirmed directly from the live response.'};}
+        // One definitive remediation per vuln; reassign leftovers to fill gaps.
+        function applySev(d,p){if((RANK[(p.risk_level||'').toLowerCase()]||0)>(RANK[(d.severity||'').toLowerCase()]||0)){const s=(p.risk_level||'');d.severity=s.charAt(0).toUpperCase()+s.slice(1).toLowerCase();}}
+        const usedP=new Set();
+        patches.forEach((p,i)=>{const want=svcLike(p.vuln_node+' '+p.reasoning);const d=bestMatch(p.vuln_node+' '+p.reasoning,want);if(!d||d.remediation)return;d.remediation={vuln_node:p.vuln_node,risk_level:p.risk_level,cves:p.cves,recommendation:p.recommendation,description:p.description,code:p.code};usedP.add(i);applySev(d,p);});
+        const leftP=patches.filter((p,i)=>!usedP.has(i));
+        for(const d of dets){if(!d.remediation&&leftP.length){const p=leftP.shift();d.remediation={vuln_node:p.vuln_node,risk_level:p.risk_level,cves:p.cves,recommendation:p.recommendation,description:p.description,code:p.code};applySev(d,p);}}
+        return dets;
+    }
+
     function reconStep(entries){
         const svc=[],cve=[];
         for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{};
@@ -303,122 +352,56 @@
         if(!svc.length&&!cve.length)return null;
         const lines=[...svc.map(s=>'Port '+s.port+': '+s.service+(s.version?' '+s.version:'')),
                      ...cve.map(c=>c.comp+' '+c.ver+(c.err?' (failed)':' \u2192 '+c.refs+' refs'))];
-        const body='<div class="space-y-1 font-mono text-xs text-ink-200">'+lines.map(l=>'<div>'+esc(l)+'</div>').join('')+'</div>';
-        return {type:'recon',title:'Reconnaissance',lines:lines.slice(0,4),modalTitle:'Reconnaissance',modalHTML:body||'<p class="text-ink-300">No services enumerated.</p>'};
+        return {type:'recon',title:'Reconnaissance',lines:lines.slice(0,4)};
     }
 
-    // --- Build nodes/edges from the canonical correlated vulnerabilities --- //
-    const NW=270,NH=108,GAP_X=86,GAP_Y=34,X0=20,Y0=20;
-    function field(label,val){return '<div><div class="eyebrow mb-1">'+esc(label)+'</div><div class="text-ink-100 leading-relaxed">'+esc(val)+'</div></div>';}
-
+    // --- Build per-vulnerability lanes: recon -> detection -> PoC -> patch --- //
+    const NW=284,NH=120,GAP_X=88,GAP_Y=34,X0=20,Y0=20;
     function buildFromVulns(vulns){
         const nodes=[],edges=[];
         const rows=vulns.length||1;
         const colX=[X0,X0+NW+GAP_X*2,X0+(NW+GAP_X)*2+GAP_X,X0+(NW+GAP_X)*3+GAP_X];
         const totalH=rows*NH+(rows-1)*GAP_Y;
-        // Recon node spanning the rows on the far left.
         const recon=reconStep(raw);
         let reconNode=null;
         if(recon){reconNode={x:colX[0],y:Y0+totalH/2-NH/2,w:NW,h:NH,...recon};nodes.push(reconNode);}
-        const dCol=recon?colX[1]:colX[0];
-        const vCol=recon?colX[2]:colX[1];
-        const pCol=recon?colX[3]:colX[2];
+        const dCol=recon?colX[1]:colX[0],vCol=recon?colX[2]:colX[1],pCol=recon?colX[3]:colX[2];
         vulns.forEach((v,i)=>{
             const y=Y0+i*(NH+GAP_Y);
-            // Detection node
             const det=v.detection||{};
-            const dNode={x:dCol,y,w:NW,h:NH,type:'finding',
-                title:v.name||'Finding',
-                lines:[v.endpoint||'',(v.category||'')+'  \u00b7  '+(v.severity||''),(det.evidence||det.reasoning||'').slice(0,46)],
-                modalTitle:v.name||'Finding',
-                modalHTML:'<div class="flex flex-wrap gap-2">'+
-                    '<span class="badge badge-violet">'+esc(v.category||'')+'</span>'+
-                    '<span class="badge '+sevClass(v.severity)+'">'+esc((v.severity||'n/a').toUpperCase())+'</span></div>'+
-                    field('Endpoint',(det.method?det.method+' ':'')+(v.endpoint||'')+(det.status?'  \u2192  HTTP '+det.status:''))+
-                    (det.evidence?field('Evidence',det.evidence):'')+
-                    (det.reasoning?field('Why it matters',det.reasoning):'')};
-            nodes.push(dNode);
-            if(reconNode)edges.push([reconNode,dNode]);
-            // Verification node
-            const ver=v.verification||{};
-            const confirmed=ver.status==='confirmed',observed=ver.status==='observed';
-            const vTitle=confirmed?'\u2713 PoC confirmed':observed?'\u2713 Live-confirmed':'\u2717 Inconclusive';
-            const vNode={x:vCol,y,w:NW,h:NH,type:'verify',
-                title:vTitle,
-                lines:[confirmed?'Exploit reproduced in sandbox':observed?'Proven from the live response':'Verification inconclusive',
-                       ver.sandbox_id?('sandbox: '+ver.sandbox_id):(ver.detail||'').slice(0,44)],
-                modalTitle:'Verification \u2014 '+(v.name||''),
-                modalHTML:'<div class="flex flex-wrap gap-2"><span class="badge '+(confirmed||observed?'badge-green':'badge-red')+'">'+esc((ver.status||'n/a').toUpperCase())+'</span></div>'+
-                    field('Method',ver.method==='sandbox_poc'?'Sandboxed proof-of-concept':'Direct live exploitation')+
-                    (ver.sandbox_id?field('Sandbox ID',ver.sandbox_id):'')+
-                    (ver.detail?field('Detail',ver.detail):'')};
-            nodes.push(vNode);
-            edges.push([dNode,vNode]);
-            // Remediation node
+            const dNode={x:dCol,y,w:NW,h:NH,type:'finding',title:v.name||'Finding',
+                lines:[(det.method?det.method+'  ':'')+(v.endpoint||''),(v.category||'')+'  \u00b7  '+(v.severity||'')+(det.status?'  \u00b7  HTTP '+det.status:''),(det.reasoning||det.evidence||'')]};
+            nodes.push(dNode);if(reconNode)edges.push([reconNode,dNode]);
+            const ver=v.verification||{};const confirmed=ver.status==='confirmed',observed=ver.status==='observed';
+            const vNode={x:vCol,y,w:NW,h:NH,type:'verify',title:confirmed?'\u2713 PoC confirmed':observed?'\u2713 Live-confirmed':'\u2717 Inconclusive',
+                lines:[confirmed?'Exploit reproduced in sandbox':observed?'Proven from the live response':'Verification inconclusive',ver.sandbox_id?('sandbox: '+ver.sandbox_id):'',ver.detail||'']};
+            nodes.push(vNode);edges.push([dNode,vNode]);
             const rem=v.remediation;
-            if(rem){
-                const pNode={x:pCol,y,w:NW,h:NH,type:'patch',
-                    title:'Patch: '+String(rem.vuln_node||v.name||'').replace(/_/g,' '),
-                    lines:['Remediation generated',(rem.recommendation||'').slice(0,46),(rem.cves&&rem.cves.length?rem.cves.join(', '):'')].filter(Boolean),
-                    modalTitle:'Remediation \u2014 '+(v.name||''),
-                    modalHTML:'<div class="flex flex-wrap gap-2"><span class="badge '+sevClass(rem.risk_level)+'">'+esc((rem.risk_level||'High').toUpperCase())+'</span>'+
-                        (rem.cves||[]).map(c=>'<span class="badge badge-red badge-mono">'+esc(c)+'</span>').join('')+'</div>'+
-                        (rem.description?field('Description',rem.description):'')+
-                        (rem.recommendation?field('Recommended fix',rem.recommendation):'')+
-                        (rem.code?'<div><div class="eyebrow mb-1">Patched code</div><pre class="code-block bg-black border border-white/10 rounded-lg p-3 overflow-x-auto text-xs"><code>'+esc(rem.code)+'</code></pre></div>':'')};
-                nodes.push(pNode);
-                edges.push([vNode,pNode]);
-            }
+            if(rem){const pNode={x:pCol,y,w:NW,h:NH,type:'patch',title:'Patch: '+String(rem.vuln_node||v.name||'').replace(/_/g,' '),
+                lines:['Remediation generated',(rem.recommendation||''),(rem.cves&&rem.cves.length?rem.cves.join(', '):'')].filter(Boolean)};
+                nodes.push(pNode);edges.push([vNode,pNode]);}
         });
         return {nodes,edges};
     }
 
-    // --- Fallback: live progress view from raw tool_results -------------- //
-    function buildLive(entries){
-        const nodes=[],edges=[];const recon=reconStep(entries);let prevCol=[];
-        const colX=[X0,X0+NW+GAP_X,X0+(NW+GAP_X)*2];
-        if(recon){const n={x:colX[0],y:Y0,w:NW,h:NH,...recon};nodes.push(n);prevCol=[n];}
-        // Scanning summary + raw findings (no cross-links implied between PoCs).
-        const probes={},finds=[];
-        for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{};
-            if(t==='send_http_request'){const ep=(a.endpoint||'').replace(/^https?:\/\/[^/]+/,'').split('?')[0]||'/';
-                const isErr=r.is_server_error||r.server_crash_suspected||r.stack_trace_detected;const b=(r.body||'').toLowerCase();
-                const ex=(ep.includes('login')&&r.status_code===200&&/dashboard|sign out|logout/.test(b))||(r.status_code===200&&/(root:x:0:0:|uid=0\(root\))/.test(b));
-                if(isErr||ex)finds.push({ep,m:a.method||'GET',s:r.status_code});else{(probes[ep]=probes[ep]||[]).push(1);}}}
-        const eps=Object.keys(probes);
-        let col1=[];
-        if(eps.length){const total=eps.reduce((s,k)=>s+probes[k].length,0);
-            const n={x:colX[1],y:Y0,w:NW,h:NH,type:'scan',title:'Endpoint scanning',
-                lines:[total+' requests \u2192 '+eps.length+' endpoints',...eps.slice(0,3).map(e=>'  '+e)],
-                modalTitle:'Endpoint scanning',modalHTML:'<div class="font-mono text-xs space-y-1">'+eps.map(e=>'<div>'+esc(e)+'</div>').join('')+'</div>'};
-            nodes.push(n);col1.push(n);for(const p of prevCol)edges.push([p,n]);}
-        finds.forEach((f,i)=>{const n={x:colX[2],y:Y0+i*(NH+GAP_Y),w:NW,h:NH,type:'finding',
-            title:'Finding: '+f.ep,lines:[f.ep,f.m+(f.s?' \u2192 HTTP '+f.s:'')],
-            modalTitle:'Finding',modalHTML:field('Endpoint',f.m+' '+f.ep+(f.s?' \u2192 HTTP '+f.s:''))};
-            nodes.push(n);for(const p of (col1.length?col1:prevCol))edges.push([p,n]);});
-        return {nodes,edges};
-    }
-
     let nodes=[],edges=[];
-    function rebuild(){const out=(VULNS&&VULNS.length)?buildFromVulns(VULNS):buildLive(raw);nodes=out.nodes;edges=out.edges;}
+    function rebuild(){const vulns=(VULNS&&VULNS.length)?VULNS:correlateClient(raw);const out=buildFromVulns(vulns);nodes=out.nodes;edges=out.edges;}
     rebuild();
 
     function clip(text,maxW){if(!text)return'';if(ctx.measureText(text).width<=maxW)return text;let t=text;while(t.length&&ctx.measureText(t+'\u2026').width>maxW)t=t.slice(0,-1);return t+'\u2026';}
     function resize(){const r=canvas.parentElement.getBoundingClientRect();canvas.width=r.width*dpr;canvas.height=r.height*dpr;canvas.style.width=r.width+'px';canvas.style.height=r.height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);}
     function viewSize(){const r=canvas.parentElement.getBoundingClientRect();return{w:r.width,h:r.height};}
 
-    // --- View bounds: never let the user pan/zoom away from the content --- //
     function contentBounds(){
         if(!nodes.length)return null;
         let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
         for(const n of nodes){a=Math.min(a,n.x);b=Math.min(b,n.y);c=Math.max(c,n.x+n.w);d=Math.max(d,n.y+n.h);}
         const pad=70;return{x:a-pad,y:b-pad,w:(c-a)+pad*2,h:(d-b)+pad*2};
     }
-    function fitScale(){const bb=contentBounds();if(!bb)return 1;const v=viewSize();return Math.min(v.w/bb.w,v.h/bb.h);}
+    function fitScale(){const bb=contentBounds();if(!bb)return 1;const v=viewSize();return Math.min(v.w/bb.w,v.h/bb.h,1.4);}
     function clampView(){
         const bb=contentBounds();if(!bb)return;const v=viewSize();
-        const minS=fitScale();
-        scale=Math.max(minS,Math.min(2.5,scale));
+        scale=Math.max(fitScale(),Math.min(2.5,scale));
         const cw=bb.w*scale,ch=bb.h*scale;
         if(cw<=v.w)offsetX=(v.w-cw)/2-bb.x*scale;
         else offsetX=Math.min(-bb.x*scale,Math.max(v.w-(bb.x+bb.w)*scale,offsetX));
@@ -441,21 +424,24 @@
             ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.setLineDash([2,10]);ctx.lineDashOffset=-flow;ctx.strokeStyle='rgba(255,255,255,0.32)';ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
             ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-8,by-4);ctx.lineTo(bx-8,by+4);ctx.closePath();ctx.fillStyle='rgba(255,255,255,0.30)';ctx.fill();}
         for(const n of nodes){const acc=ACCENT[n.type]||'#3b82f6';const hov=n===hoverNode;
-            ctx.save();ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=hov?26:16;ctx.shadowOffsetY=6;
-            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,12);
+            ctx.save();
+            // depth shadow, tinted with the accent on hover
+            ctx.shadowColor=hov?hexA(acc,0.45):'rgba(0,0,0,0.55)';ctx.shadowBlur=hov?28:16;ctx.shadowOffsetY=6;
+            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);
             const g=ctx.createLinearGradient(n.x,n.y,n.x,n.y+n.h);g.addColorStop(0,NODE_BG2);g.addColorStop(1,NODE_BG);ctx.fillStyle=g;ctx.fill();
             ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
-            ctx.strokeStyle=hov?BORDER_HI:BORDER;ctx.lineWidth=hov?1.5:1;ctx.stroke();
-            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,12);ctx.clip();
-            ctx.fillStyle=acc;ctx.fillRect(n.x,n.y,3,n.h);
-            const gg=ctx.createLinearGradient(n.x,n.y,n.x+60,n.y);gg.addColorStop(0,acc+'22');gg.addColorStop(1,'transparent');ctx.fillStyle=gg;ctx.fillRect(n.x,n.y,60,n.h);
-            const pad=15,tw=n.w-pad-12;
-            ctx.beginPath();ctx.arc(n.x+pad+3,n.y+pad+5,3.5,0,6.2832);ctx.fillStyle=acc;ctx.fill();
+            // accent OUTLINE (replaces the old left side bar)
+            ctx.strokeStyle=hov?acc:hexA(acc,0.55);ctx.lineWidth=hov?2:1.5;ctx.stroke();
+            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);ctx.clip();
+            const pad=16,tw=n.w-pad-14;
+            // accent dot + title
+            ctx.beginPath();ctx.arc(n.x+pad+3,n.y+pad+6,3.5,0,6.2832);ctx.fillStyle=acc;ctx.fill();
             ctx.font='600 13px Geist,-apple-system,sans-serif';ctx.fillStyle=TITLE;ctx.textBaseline='middle';
-            ctx.fillText(clip(n.title,tw-16),n.x+pad+14,n.y+pad+5);
+            ctx.fillText(clip(n.title,tw-16),n.x+pad+14,n.y+pad+6);
+            // body lines
             ctx.textBaseline='top';ctx.font='400 11px "Geist Mono",ui-monospace,monospace';
-            const lh=16;let ly=n.y+pad+22;const maxL=Math.floor((n.h-pad-24)/lh);
-            const lines=n.lines||[];
+            const lh=16;let ly=n.y+pad+24;const maxL=Math.floor((n.h-pad-26)/lh);
+            const lines=(n.lines||[]).filter(l=>l!=='');
             for(let i=0;i<Math.min(lines.length,maxL);i++){ctx.fillStyle=i===0?BODY:DIM;ctx.fillText(clip(lines[i],tw),n.x+pad,ly);ly+=lh;}
             ctx.restore();}
         ctx.restore();
@@ -464,20 +450,11 @@
     function hitTest(clientX,clientY){const r=canvas.getBoundingClientRect();const mx=(clientX-r.left-offsetX)/scale,my=(clientY-r.top-offsetY)/scale;
         for(let i=nodes.length-1;i>=0;i--){const n=nodes[i];if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h)return n;}return null;}
 
-    function openModal(n){document.getElementById('graphModalTitle').textContent=n.modalTitle||n.title||'';
-        document.getElementById('graphModalBody').innerHTML=n.modalHTML||'<p class="text-ink-300">No additional detail.</p>';
-        modal.classList.remove('hidden');}
-    window.closeGraphModal=()=>modal.classList.add('hidden');
-    document.getElementById('graphModalBackdrop').addEventListener('click',window.closeGraphModal);
-    document.addEventListener('keydown',e=>{if(e.key==='Escape')window.closeGraphModal();});
-
-    canvas.addEventListener('mousedown',e=>{dragging=true;moved=false;lastMouse={x:e.clientX,y:e.clientY};downPos={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
+    canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
     canvas.addEventListener('mousemove',e=>{
-        if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};
-            if(Math.abs(e.clientX-downPos.x)+Math.abs(e.clientY-downPos.y)>4)moved=true;return;}
-        hoverNode=hitTest(e.clientX,e.clientY);canvas.style.cursor=hoverNode?'pointer':'grab';});
-    canvas.addEventListener('mouseup',e=>{dragging=false;canvas.style.cursor=hoverNode?'pointer':'grab';
-        if(!moved){const n=hitTest(e.clientX,e.clientY);if(n)openModal(n);}});
+        if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};return;}
+        hoverNode=hitTest(e.clientX,e.clientY);});
+    canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
     canvas.addEventListener('mouseleave',()=>{dragging=false;hoverNode=null;});
     canvas.addEventListener('wheel',e=>{e.preventDefault();scale*=(e.deltaY<0?1.12:0.88);clampView();},{passive:false});
     window.graphZoom=f=>{scale*=f;clampView();};

@@ -64,6 +64,19 @@ _LABEL_META: dict[str, dict] = {
 
 _RISK_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "informational": 0}
 
+# Per-category keywords for fuzzy matching a PoC/patch to a detection. The
+# endpoint path is the STRONG signal (weighted higher in _best_match); these
+# category keywords are only a tie-breaking hint, so a generic word like
+# "injection" can't steal a patch away from the endpoint it actually names.
+_CATEGORY_KEYWORDS: dict[str, tuple] = {
+    "Broken Authentication": ("login", "auth", "sqli", "sql", "signin", "bypass", "credential"),
+    "SQL Injection": ("sql", "sqli", "injection"),
+    "Path Traversal": ("traversal", "lfi", "path", "download", "file", "directory"),
+    "OS Command Injection": ("command", "cmd", "rce", "exec", "shell", "diagnostics", "ping", "backup"),
+    "Vulnerable Service": ("ftp", "vsftpd", "backdoor", "ssh", "smb", "service", "telnet"),
+    "Injection": ("injection", "inject"),
+}
+
 # Keywords that hint a PoC / patch concerns a network-service (non-HTTP) finding.
 _SERVICE_HINTS = ("ftp", "vsftpd", "backdoor", "6200", "ssh", "smb", "telnet")
 
@@ -260,9 +273,14 @@ def correlate(attack_graph: dict | None) -> dict:
             is_service = det["category"] == "Vulnerable Service"
             score = 0
             if want_service and is_service:
-                score += 2
-            for tok in _path_tokens(_norm_path(det["endpoint"])) | {det["category"].lower().split()[0]}:
+                score += 3
+            # Endpoint path tokens are the strong, specific signal.
+            for tok in _path_tokens(_norm_path(det["endpoint"])):
                 if tok and tok in text_low:
+                    score += 3
+            # Category keywords are a weak tie-breaker only.
+            for kw in _CATEGORY_KEYWORDS.get(det["category"], ()):
+                if kw in text_low:
                     score += 1
             if score > best_score:
                 best, best_score = det, score
