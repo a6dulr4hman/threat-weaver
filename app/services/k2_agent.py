@@ -15,8 +15,8 @@ from app.services.llm_client import LLMClient
 from app.services.llm_json import extract_json_object, is_api_error
 
 # Guardrails to protect against infinite loops and token exhaustion
-MAX_ITERATIONS = 20
-MAX_HISTORY_MESSAGES = 20
+MAX_ITERATIONS = 30
+MAX_HISTORY_MESSAGES = 30
 
 # The number of times the orchestrator will nudge the LLM if it fails to output valid JSON
 MAX_PARSE_RETRIES = 2
@@ -87,7 +87,20 @@ exploit you already reproduced with send_http_request (auth bypass, sensitive
 file/data disclosure, OS command output) is self-confirming — call generate_patch
 for it directly; you do NOT need a separate execute_safe_poc. Reserve
 execute_safe_poc for crash/error-based findings you want to reproduce in
-isolation. Map run_nmap service banners to CVEs with query_hackclub.
+isolation.
+
+RECON FOLLOW-UP (mandatory after run_nmap):
+After receiving nmap results, for EVERY service that reports a specific version
+string (e.g. "vsftpd 2.3.4", "OpenSSH 9.6p1", "Apache 2.4.49"), you MUST call
+query_hackclub with that component and version to check for known CVEs. Example:
+  {"action": "tool_call", "tool": "query_hackclub",
+   "arguments": {"component": "vsftpd", "version": "2.3.4"}, "reasoning": "..."}
+If query_hackclub returns a critical CVE (e.g. a backdoor, RCE, or auth bypass),
+use execute_safe_poc to write a Python script that attempts to trigger it against
+the target. For example, vsftpd 2.3.4 has CVE-2011-2523 (a backdoor triggered by
+sending USER x:) then PASS x on the FTP port, which opens a shell on port 6200).
+Do NOT skip this step — version-identified vulnerabilities in network services
+are often the most severe findings in a scan.
 
 USING execute_safe_poc (critical for confirmation):
 The script you provide runs in a sandboxed Python subprocess. To confirm an

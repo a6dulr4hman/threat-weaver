@@ -44,7 +44,7 @@ MAX_PATCHES = 7
 # a single stuck job from blocking the server for 10+ minutes.
 # Override with CYCLE_BUDGET_SECONDS env var if needed.
 DEFAULT_CYCLE_BUDGET_SECONDS = float(
-    os.getenv("CYCLE_BUDGET_SECONDS", "300")
+    os.getenv("CYCLE_BUDGET_SECONDS", "480")
 )
 
 
