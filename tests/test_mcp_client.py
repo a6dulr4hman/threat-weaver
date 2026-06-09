@@ -107,7 +107,7 @@ async def test_execute_safe_poc_missing_interpreter():
 
 async def test_query_hackclub_error(monkeypatch):
     """Mock httpx to return 500, verify graceful fallback."""
-    monkeypatch.setenv("HACKCLUB_API_KEY", "sk-hc-v1-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test-key")
     client = MCPClient()
 
     mock_response = MagicMock()
@@ -128,18 +128,18 @@ async def test_query_hackclub_error(monkeypatch):
 
 async def test_query_hackclub_no_api_key(monkeypatch):
     """Without an API key, query_hackclub short-circuits with a helpful error."""
-    monkeypatch.delenv("HACKCLUB_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
     client = MCPClient()
 
     result = await client.query_hackclub("nginx", "1.14.0")
 
     assert result["references"] == []
-    assert "HACKCLUB_API_KEY" in result["error"]
+    assert "BRAVE_SEARCH_API_KEY" in result["error"]
 
 
 async def test_query_hackclub_parses_web_results(monkeypatch):
     """A 200 response is parsed from data['web']['results'] into references."""
-    monkeypatch.setenv("HACKCLUB_API_KEY", "sk-hc-v1-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test-key")
     client = MCPClient()
 
     mock_response = MagicMock()
@@ -174,7 +174,7 @@ async def test_query_hackclub_parses_web_results(monkeypatch):
 
 async def test_query_hackclub_network_error(monkeypatch):
     """Verify graceful handling of network errors."""
-    monkeypatch.setenv("HACKCLUB_API_KEY", "sk-hc-v1-test")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test-key")
     client = MCPClient()
 
     import httpx

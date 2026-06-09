@@ -298,7 +298,7 @@ class MCPClient:
         # Create a restricted environment: remove sensitive variables
         safe_env = os.environ.copy()
         sensitive_keys = (
-            "SECRET_KEY", "K2_API_KEY", "HACKCLUB_API_KEY", "DATABASE_URL",
+            "SECRET_KEY", "K2_API_KEY", "BRAVE_SEARCH_API_KEY", "DATABASE_URL",
         )
         for key in sensitive_keys:
             safe_env.pop(key, None)
@@ -350,26 +350,27 @@ class MCPClient:
         self, component_signature: str, version_string: str
     ) -> dict:
         """
-        Query the Hack Club Search API for known vulnerabilities / CVEs.
+        Query the Brave Search API for known vulnerabilities / CVEs.
 
-        The Hack Club Search API is a Brave Search proxy. The web search
-        endpoint is ``GET /res/v1/web/search?q=...`` and requires an API key
-        passed as a bearer token (``Authorization: Bearer sk-hc-v1-...``) or via
-        the ``x-subscription-token`` header. The response nests results under
-        ``data["web"]["results"]`` where each result has ``title``, ``url`` and
-        ``description`` fields.
+        Uses the Brave Web Search API (https://api.search.brave.com) to find
+        public CVE disclosures and vulnerability references for a given software
+        component and version.
 
-        See https://search.hackclub.com/docs for the full specification.
+        Authentication: X-Subscription-Token header with a key from
+        https://brave.com/search/api/ (stored in BRAVE_SEARCH_API_KEY env var).
+
+        API docs: https://api.search.brave.com/app#/web/get-search
+        Response shape: data["web"]["results"] -> [{title, url, description}]
         """
-        api_key = os.getenv("HACKCLUB_API_KEY", "")
+        api_key = os.getenv("BRAVE_SEARCH_API_KEY", "")
         if not api_key:
             return {
                 "references": [],
                 "vulnerable_components": [],
                 "mitigations": [],
                 "error": (
-                    "HACKCLUB_API_KEY is not set. Get a key from "
-                    "https://search.hackclub.com and set it in the environment."
+                    "BRAVE_SEARCH_API_KEY is not set. Get a key from "
+                    "https://brave.com/search/api/ and set it in the environment."
                 ),
             }
 
@@ -383,13 +384,13 @@ class MCPClient:
             else f"{component} CVE vulnerability"
         )
 
-        url = "https://search.hackclub.com/res/v1/web/search"
-        params = {"q": query}
-        # The Hack Club docs show both Authorization: Bearer and
-        # x-subscription-token. Send both for maximum compatibility.
+        url = "https://api.search.brave.com/res/v1/web/search"
+        params = {"q": query, "count": 5}
+        # Brave Search API uses X-Subscription-Token for auth.
+        # Docs: https://api.search.brave.com/app#/web/get-search
         headers = {
-            "Authorization": f"Bearer {api_key}",
-            "x-subscription-token": api_key,
+            "X-Subscription-Token": api_key,
+            "Accept": "application/json",
         }
 
         try:
@@ -407,7 +408,7 @@ class MCPClient:
                         "vulnerable_components": [],
                         "mitigations": [],
                         "error": (
-                            f"Hack Club Search API returned {resp.status_code}"
+                            f"Brave Search API returned {resp.status_code}"
                             f"{': ' + detail if detail else ''}"
                         ),
                     }
@@ -434,7 +435,7 @@ class MCPClient:
                 "references": [],
                 "vulnerable_components": [],
                 "mitigations": [],
-                "error": f"Hack Club Search request failed: {e}",
+                "error": f"Brave Search request failed: {e}",
             }
 
 
