@@ -41,7 +41,7 @@
     {% set states = ["ready", "recon", "dast_testing", "poc_verification", "blue_team_remediation", "complete"] %}
     {% set state_labels = {"ready": "Ready", "recon": "Recon", "dast_testing": "DAST", "poc_verification": "PoC Verify", "blue_team_remediation": "Remediation", "complete": "Complete"} %}
     {% set display_phase = 'complete' if job.status == 'complete' else (job.pipeline_phase if job.pipeline_phase else job.status) %}
-    {% set current_index = states.index(display_phase) if display_phase in states else 0 %}
+    {% set current_index = (states | length) if job.status == 'complete' else (states.index(display_phase) if display_phase in states else 0) %}
 
     <div class="flex items-center justify-between w-full overflow-x-auto pb-2">
         {% for state in states %}
