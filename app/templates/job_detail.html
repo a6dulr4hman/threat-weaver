@@ -202,15 +202,20 @@
     {% endif %}
 
     <!-- Canvas Graph Container -->
-    <div class="relative rounded-lg border border-slate-700 bg-slate-900/80 overflow-hidden" style="height: 520px;">
-        <canvas id="attackGraphCanvas" class="w-full h-full" style="width:100%;height:100%;"></canvas>
-        <!-- Tooltip -->
-        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-xs px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 shadow-xl text-xs text-gray-200 leading-relaxed"></div>
-        <!-- Zoom controls -->
+    <div class="relative rounded-lg border border-slate-700 bg-slate-900/80 overflow-hidden" style="height: 580px;">
+        <canvas id="attackGraphCanvas" class="w-full h-full" style="width:100%;height:100%;cursor:grab;"></canvas>
+        <div id="graphTooltip" class="absolute hidden pointer-events-none z-50 max-w-sm px-4 py-3 rounded-lg bg-slate-700 border border-slate-600 shadow-xl text-xs text-gray-200 leading-relaxed"></div>
         <div class="absolute bottom-3 right-3 flex gap-1.5">
             <button onclick="graphZoom(1.2)" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-sm font-bold">+</button>
             <button onclick="graphZoom(0.8)" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-sm font-bold">&minus;</button>
             <button onclick="graphReset()" class="w-7 h-7 rounded bg-slate-700/90 border border-slate-600 text-gray-300 hover:bg-slate-600 flex items-center justify-center text-xs">&#8634;</button>
+        </div>
+        <div class="absolute top-3 left-3 flex gap-3 text-[10px] text-gray-400">
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-cyan-500"></span>Recon</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span>Scanning</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>Finding</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>Verification</span>
+            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-green-500"></span>Remediation</span>
         </div>
     </div>
 
@@ -223,185 +228,189 @@
         let scale = 1, offsetX = 0, offsetY = 0, dragging = false, lastMouse = {x:0,y:0};
         const dpr = window.devicePixelRatio || 1;
 
-        // Colors
-        const COLORS = {
-            run_nmap: {fill:'#155e75', stroke:'#22d3ee', text:'#67e8f9'},
-            query_hackclub: {fill:'#4c1d95', stroke:'#a78bfa', text:'#c4b5fd'},
-            send_http_request: {fill:'#1e3a5f', stroke:'#3b82f6', text:'#93c5fd'},
-            send_http_request_exploit: {fill:'#7f1d1d', stroke:'#f87171', text:'#fca5a5'},
-            execute_safe_poc: {fill:'#78350f', stroke:'#fbbf24', text:'#fde68a'},
-            execute_safe_poc_confirmed: {fill:'#7f1d1d', stroke:'#f87171', text:'#fca5a5'},
-            generate_patch: {fill:'#14532d', stroke:'#4ade80', text:'#bbf7d0'},
-            run_fuzzer: {fill:'#7c2d12', stroke:'#fb923c', text:'#fed7aa'},
-            default: {fill:'#334155', stroke:'#64748b', text:'#94a3b8'}
-        };
+        // ─── Group raw tool_results into logical STEPS ───────────────────
+        function buildSteps(entries) {
+            const steps = [];
+            let reconServices = [], reconCVEs = [];
+            let probeGroups = {};
+            let findings = [];
+            let verifications = [];
+            let patches = [];
 
-        function getNodeColor(entry) {
-            const t = entry.tool, r = entry.result || {};
-            if (t === 'send_http_request') {
-                if (r.is_server_error || r.server_crash_suspected) return COLORS.send_http_request_exploit;
-                const b = (r.body||'').toLowerCase();
-                if (r.status_code === 200 && (b.includes('root:x:0:0:') || b.includes('uid=0(root)'))) return COLORS.send_http_request_exploit;
-            }
-            if (t === 'execute_safe_poc' && r.exploit_confirmed) return COLORS.execute_safe_poc_confirmed;
-            return COLORS[t] || COLORS.default;
-        }
-
-        function getLabel(entry) {
-            const t = entry.tool, a = entry.arguments || {};
-            if (t === 'run_nmap') return 'Nmap: ' + (a.target||'').replace(/^https?:\/\//, '');
-            if (t === 'query_hackclub') return 'CVE: ' + (a.component||'') + ' ' + (a.version||'');
-            if (t === 'send_http_request') {
-                let ep = (a.endpoint||'').replace(/^https?:\/\/[^/]+/, '');
-                if (ep.length > 28) ep = ep.slice(0,25)+'...';
-                return (a.method||'GET') + ' ' + ep;
-            }
-            if (t === 'execute_safe_poc') return 'PoC: ' + (a.sandbox_id||'verify');
-            if (t === 'generate_patch') return 'Patch: ' + (a.vuln_node||'fix').slice(0,20);
-            if (t === 'run_fuzzer') return 'Fuzz';
-            return t;
-        }
-
-        function getStatus(entry) {
-            const t = entry.tool, r = entry.result || {};
-            if (t === 'run_nmap') return ((r.results||[]).length) + ' ports';
-            if (t === 'query_hackclub') return r.error ? 'FAILED' : ((r.references||[]).length)+' refs';
-            if (t === 'send_http_request') {
-                if (r.is_server_error) return r.status_code + ' ERROR';
-                const b = (r.body||'').toLowerCase();
-                if (r.status_code===200 && (b.includes('root:x:0:0:') || b.includes('uid=0(root)') || b.includes('dashboard'))) return 'EXPLOITED';
-                return ''+r.status_code;
-            }
-            if (t === 'execute_safe_poc') return r.exploit_confirmed ? 'CONFIRMED' : 'NEGATIVE';
-            if (t === 'generate_patch') return r.error ? 'FAILED' : 'PATCHED';
-            return '';
-        }
-
-        // Build nodes
-        const NODE_W = 200, NODE_H = 56, PAD_X = 70, PAD_Y = 28;
-        const COLS = 4;
-        const nodes = raw.map((entry, i) => {
-            const col = i % COLS;
-            const row = Math.floor(i / COLS);
-            // Zigzag: even rows go left-to-right, odd rows right-to-left
-            const x = (row % 2 === 0) ? 40 + col * (NODE_W + PAD_X) : 40 + (COLS - 1 - col) * (NODE_W + PAD_X);
-            const y = 40 + row * (NODE_H + PAD_Y);
-            return {x, y, w: NODE_W, h: NODE_H, entry, color: getNodeColor(entry), label: getLabel(entry), status: getStatus(entry), iteration: entry.iteration !== undefined ? entry.iteration : i};
-        });
-
-        function resize() {
-            const rect = canvas.parentElement.getBoundingClientRect();
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
-            canvas.style.width = rect.width + 'px';
-            canvas.style.height = rect.height + 'px';
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            draw();
-        }
-
-        function draw() {
-            const w = canvas.width / dpr, h = canvas.height / dpr;
-            ctx.save();
-            ctx.clearRect(0, 0, w, h);
-            ctx.translate(offsetX, offsetY);
-            ctx.scale(scale, scale);
-
-            // Draw edges (arrows)
-            for (let i = 0; i < nodes.length - 1; i++) {
-                const a = nodes[i], b = nodes[i+1];
-                const ax = a.x + a.w/2, ay = a.y + a.h;
-                const bx = b.x + b.w/2, by = b.y;
-                ctx.beginPath();
-                ctx.moveTo(ax, ay);
-                // Curved connector
-                const midY = (ay + by) / 2;
-                ctx.bezierCurveTo(ax, midY, bx, midY, bx, by);
-                ctx.strokeStyle = '#475569';
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-                // Arrowhead
-                const angle = Math.atan2(by - midY, bx - bx) || Math.PI/2;
-                ctx.beginPath();
-                ctx.moveTo(bx, by);
-                ctx.lineTo(bx - 5, by - 8);
-                ctx.lineTo(bx + 5, by - 8);
-                ctx.closePath();
-                ctx.fillStyle = '#475569';
-                ctx.fill();
-            }
-
-            // Draw nodes
-            for (const n of nodes) {
-                // Shadow
-                ctx.shadowColor = n.color.stroke + '40';
-                ctx.shadowBlur = 12;
-                // Body
-                ctx.beginPath();
-                ctx.roundRect(n.x, n.y, n.w, n.h, 10);
-                ctx.fillStyle = n.color.fill;
-                ctx.fill();
-                ctx.strokeStyle = n.color.stroke;
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-                ctx.shadowBlur = 0;
-
-                // Iteration badge
-                ctx.font = '600 9px ui-monospace, monospace';
-                ctx.fillStyle = '#64748b';
-                ctx.textBaseline = 'top';
-                ctx.fillText('#' + n.iteration, n.x + 8, n.y + 8);
-
-                // Label
-                ctx.font = '600 11px -apple-system, sans-serif';
-                ctx.fillStyle = n.color.text;
-                ctx.fillText(n.label.slice(0, 26), n.x + 8, n.y + 22);
-
-                // Status badge
-                if (n.status) {
-                    const badgeX = n.x + 8, badgeY = n.y + 38;
-                    ctx.font = '700 9px ui-monospace, monospace';
-                    const tw = ctx.measureText(n.status).width;
-                    ctx.beginPath();
-                    ctx.roundRect(badgeX, badgeY, tw + 10, 14, 4);
-                    ctx.fillStyle = n.color.stroke + '30';
-                    ctx.fill();
-                    ctx.fillStyle = n.color.text;
-                    ctx.fillText(n.status, badgeX + 5, badgeY + 3);
+            for (const e of entries) {
+                const t = e.tool, r = e.result || {}, a = e.arguments || {};
+                if (t === 'run_nmap') {
+                    for (const svc of (r.results || [])) reconServices.push(svc);
+                } else if (t === 'query_hackclub') {
+                    reconCVEs.push({component: a.component||'', version: a.version||'', refs: r.references||[], error: r.error});
+                } else if (t === 'send_http_request') {
+                    const ep = (a.endpoint||'').replace(/^https?:\/\/[^/]+/, '').split('?')[0].replace(/%27.*$|'.*$/,'') || '/';
+                    const isAnomaly = r.is_server_error || r.server_crash_suspected || r.stack_trace_detected;
+                    const body = (r.body||'').toLowerCase();
+                    const isExploit = (r.status_code===200 && (body.includes('root:x:0:0:') || body.includes('uid=0(root)') || body.includes('dashboard')));
+                    if (isAnomaly || isExploit) {
+                        findings.push({endpoint: ep, method: a.method||'GET', status: r.status_code, type: isExploit?'exploit':'error', reasoning: e.reasoning||''});
+                    } else {
+                        if (!probeGroups[ep]) probeGroups[ep] = [];
+                        probeGroups[ep].push({method: a.method||'GET', status: r.status_code});
+                    }
+                } else if (t === 'execute_safe_poc') {
+                    verifications.push({sandbox: a.sandbox_id||'poc', confirmed: r.exploit_confirmed||false, reasoning: e.reasoning||''});
+                } else if (t === 'generate_patch') {
+                    patches.push({vuln: a.vuln_node||'unknown', error: r.error, reasoning: e.reasoning||''});
                 }
             }
 
+            // 1. RECON
+            if (reconServices.length || reconCVEs.length) {
+                steps.push({type:'recon', label:'Reconnaissance',
+                    detail: reconServices.map(s=>s.port+'/'+s.service+(s.version?' '+s.version:'')).join(', '),
+                    sub: reconCVEs.filter(c=>!c.error).map(c=>c.component+' '+c.version).join(', ') || (reconCVEs.length?'CVE lookup failed':''),
+                    tooltip:'Nmap scan results:\n'+reconServices.map(s=>'  Port '+s.port+': '+s.service+' '+s.version).join('\n')+(reconCVEs.length?'\n\nCVE lookups: '+reconCVEs.map(c=>c.component+' '+c.version).join(', '):'')
+                });
+            }
+            // 2. SCAN (merged)
+            const probeEps = Object.keys(probeGroups);
+            if (probeEps.length) {
+                const total = Object.values(probeGroups).reduce((s,g)=>s+g.length,0);
+                steps.push({type:'scan', label:'Endpoint Scanning',
+                    detail: total+' requests → '+probeEps.length+' endpoints',
+                    sub: probeEps.slice(0,4).join(', ')+(probeEps.length>4?' +'+(probeEps.length-4)+' more':''),
+                    tooltip:'Probed endpoints:\n'+probeEps.map(ep=>'  '+ep+' ('+probeGroups[ep].length+' req)').join('\n')
+                });
+            }
+            // 3. FINDINGS (branch — one per unique endpoint)
+            const seen = new Set();
+            for (const f of findings) { if (!seen.has(f.endpoint)) { seen.add(f.endpoint); steps.push({type:'finding', label:(f.type==='exploit'?'Exploited':'Anomaly')+': '+f.endpoint, detail:f.method+' → '+(f.type==='exploit'?'SUCCESS':'HTTP '+f.status), sub:f.reasoning.slice(0,60), tooltip:f.reasoning||(f.method+' '+f.endpoint)}); } }
+            // 4. VERIFY
+            const confirmed = verifications.filter(v=>v.confirmed);
+            if (confirmed.length) steps.push({type:'verify', label:'PoC Confirmed', detail:confirmed.length+' exploit(s) verified', sub:confirmed.map(v=>v.sandbox).join(', '), tooltip:'Confirmed:\n'+confirmed.map(v=>'  '+v.sandbox+': '+v.reasoning).join('\n')});
+            else if (verifications.length) steps.push({type:'verify_fail', label:'PoC Attempted', detail:verifications.length+' attempt(s)', sub:'None confirmed', tooltip:'PoC ran but did not confirm'});
+            // 5. PATCHES
+            for (const p of patches) steps.push({type:'patch', label:'Patched: '+p.vuln.replace(/_/g,' ').slice(0,22), detail:p.error?'FAILED':'Remediation generated', sub:p.reasoning.slice(0,50), tooltip:p.reasoning||('Patch: '+p.vuln)});
+            return steps;
+        }
+
+        const steps = buildSteps(raw);
+
+        // ─── Layout: center single nodes, fan-out findings in parallel ───
+        const COLORS = {
+            recon:{fill:'#0c4a6e',stroke:'#22d3ee',text:'#67e8f9',glow:'#22d3ee'},
+            scan:{fill:'#1e3a5f',stroke:'#3b82f6',text:'#93c5fd',glow:'#3b82f6'},
+            finding:{fill:'#7f1d1d',stroke:'#f87171',text:'#fca5a5',glow:'#f87171'},
+            verify:{fill:'#78350f',stroke:'#fbbf24',text:'#fde68a',glow:'#fbbf24'},
+            verify_fail:{fill:'#44403c',stroke:'#a8a29e',text:'#d6d3d1',glow:'#a8a29e'},
+            patch:{fill:'#14532d',stroke:'#4ade80',text:'#bbf7d0',glow:'#4ade80'}
+        };
+        const NODE_W=240, NODE_H=70;
+
+        function layoutNodes(steps) {
+            const nodes=[]; let y=50; const cx=420;
+            let i=0;
+            while(i<steps.length) {
+                // Collect consecutive findings for parallel layout
+                if (steps[i].type==='finding') {
+                    const group=[];
+                    while(i<steps.length && steps[i].type==='finding') { group.push(steps[i]); i++; }
+                    const totalW=group.length*NODE_W+(group.length-1)*50;
+                    const startX=cx-totalW/2;
+                    for(let fi=0;fi<group.length;fi++) {
+                        nodes.push({x:startX+fi*(NODE_W+50), y, w:NODE_W, h:NODE_H, step:group[fi], color:COLORS.finding});
+                    }
+                    y+=NODE_H+70;
+                } else {
+                    nodes.push({x:cx-NODE_W/2, y, w:NODE_W, h:NODE_H, step:steps[i], color:COLORS[steps[i].type]||COLORS.scan});
+                    y+=NODE_H+70;
+                    i++;
+                }
+            }
+            return nodes;
+        }
+        const nodes=layoutNodes(steps);
+
+        // ─── Edges: fan-out to findings, fan-in after ────────────────────
+        function buildEdges(nodes) {
+            const edges=[];
+            for(let i=0;i<nodes.length;i++) {
+                if(i===0) continue;
+                const prev=nodes[i-1], curr=nodes[i];
+                // Skip edges between parallel findings at same Y
+                if(prev.step.type==='finding'&&curr.step.type==='finding'&&prev.y===curr.y) continue;
+                // Fan-out: previous non-finding → all findings at this Y
+                if(prev.step.type!=='finding'&&curr.step.type==='finding') {
+                    const fy=curr.y;
+                    for(const n of nodes) if(n.step.type==='finding'&&n.y===fy) edges.push([prev,n]);
+                    continue;
+                }
+                // Fan-in: last finding row → next non-finding
+                if(prev.step.type==='finding'&&curr.step.type!=='finding') {
+                    const fy=prev.y;
+                    for(const n of nodes) if(n.step.type==='finding'&&n.y===fy) { if(!edges.find(e=>e[0]===n&&e[1]===curr)) edges.push([n,curr]); }
+                    continue;
+                }
+                edges.push([prev,curr]);
+            }
+            return edges;
+        }
+        const edges=buildEdges(nodes);
+
+        // ─── Render ──────────────────────────────────────────────────────
+        function resize() {
+            const rect=canvas.parentElement.getBoundingClientRect();
+            canvas.width=rect.width*dpr; canvas.height=rect.height*dpr;
+            canvas.style.width=rect.width+'px'; canvas.style.height=rect.height+'px';
+            ctx.setTransform(dpr,0,0,dpr,0,0); draw();
+        }
+
+        function draw() {
+            const w=canvas.width/dpr, h=canvas.height/dpr;
+            ctx.save(); ctx.clearRect(0,0,w,h);
+            ctx.translate(offsetX,offsetY); ctx.scale(scale,scale);
+
+            // Edges
+            for(const[a,b]of edges) {
+                const ax=a.x+a.w/2,ay=a.y+a.h, bx=b.x+b.w/2,by=b.y;
+                ctx.beginPath(); ctx.moveTo(ax,ay);
+                const my=(ay+by)/2;
+                ctx.bezierCurveTo(ax,my,bx,my,bx,by);
+                ctx.strokeStyle='#475569'; ctx.lineWidth=2; ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx-5,by-9); ctx.lineTo(bx+5,by-9); ctx.closePath(); ctx.fillStyle='#475569'; ctx.fill();
+            }
+
+            // Nodes
+            for(const n of nodes) {
+                const c=n.color;
+                ctx.shadowColor=c.glow+'50'; ctx.shadowBlur=18;
+                ctx.beginPath(); ctx.roundRect(n.x,n.y,n.w,n.h,12);
+                ctx.fillStyle=c.fill; ctx.fill(); ctx.shadowBlur=0;
+                ctx.strokeStyle=c.stroke; ctx.lineWidth=2; ctx.stroke();
+                // Icon dot
+                ctx.beginPath(); ctx.arc(n.x+20,n.y+22,8,0,Math.PI*2); ctx.fillStyle=c.stroke+'40'; ctx.fill();
+                ctx.beginPath(); ctx.arc(n.x+20,n.y+22,4,0,Math.PI*2); ctx.fillStyle=c.stroke; ctx.fill();
+                // Label
+                ctx.font='700 12px -apple-system,sans-serif'; ctx.fillStyle=c.text; ctx.textBaseline='top';
+                ctx.fillText(n.step.label.slice(0,28),n.x+36,n.y+14);
+                // Detail
+                ctx.font='400 10px -apple-system,sans-serif'; ctx.fillStyle='#94a3b8';
+                ctx.fillText((n.step.detail||'').slice(0,38),n.x+36,n.y+32);
+                // Sub
+                if(n.step.sub){ctx.font='400 9px ui-monospace,monospace';ctx.fillStyle='#64748b';ctx.fillText(n.step.sub.slice(0,44),n.x+36,n.y+48);}
+            }
             ctx.restore();
         }
 
-        // Pan & zoom
-        canvas.addEventListener('mousedown', e => { dragging = true; lastMouse = {x: e.clientX, y: e.clientY}; canvas.style.cursor = 'grabbing'; });
-        canvas.addEventListener('mousemove', e => {
-            if (dragging) { offsetX += e.clientX - lastMouse.x; offsetY += e.clientY - lastMouse.y; lastMouse = {x: e.clientX, y: e.clientY}; draw(); }
-            else {
-                // Tooltip
-                const rect = canvas.getBoundingClientRect();
-                const mx = (e.clientX - rect.left - offsetX) / scale;
-                const my = (e.clientY - rect.top - offsetY) / scale;
-                let hit = null;
-                for (const n of nodes) { if (mx >= n.x && mx <= n.x+n.w && my >= n.y && my <= n.y+n.h) { hit = n; break; } }
-                if (hit) {
-                    const r = hit.entry.reasoning || '';
-                    tooltip.innerHTML = '<b class="text-gray-100">#'+hit.iteration+' '+hit.label+'</b>'+(r ? '<br>'+r.slice(0,150) : '');
-                    tooltip.style.left = (e.clientX - rect.left + 12) + 'px';
-                    tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
-                    tooltip.classList.remove('hidden');
-                    canvas.style.cursor = 'pointer';
-                } else { tooltip.classList.add('hidden'); canvas.style.cursor = 'grab'; }
-            }
+        // ─── Interaction ─────────────────────────────────────────────────
+        canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
+        canvas.addEventListener('mousemove',e=>{
+            if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};draw();}
+            else{const rect=canvas.getBoundingClientRect();const mx=(e.clientX-rect.left-offsetX)/scale,my=(e.clientY-rect.top-offsetY)/scale;let hit=null;for(const n of nodes){if(mx>=n.x&&mx<=n.x+n.w&&my>=n.y&&my<=n.y+n.h){hit=n;break;}}if(hit){tooltip.innerHTML='<b class="text-gray-100 block mb-1">'+hit.step.label.replace(/</g,'&lt;')+'</b><span class="text-gray-300">'+(hit.step.tooltip||hit.step.detail||'').replace(/\n/g,'<br>').replace(/</g,'&lt;')+'</span>';tooltip.style.left=(e.clientX-rect.left+14)+'px';tooltip.style.top=(e.clientY-rect.top-10)+'px';tooltip.classList.remove('hidden');canvas.style.cursor='pointer';}else{tooltip.classList.add('hidden');canvas.style.cursor='grab';}}
         });
-        canvas.addEventListener('mouseup', () => { dragging = false; canvas.style.cursor = 'grab'; });
-        canvas.addEventListener('mouseleave', () => { dragging = false; tooltip.classList.add('hidden'); canvas.style.cursor = 'grab'; });
-        canvas.addEventListener('wheel', e => { e.preventDefault(); const z = e.deltaY < 0 ? 1.1 : 0.9; scale *= z; scale = Math.max(0.3, Math.min(3, scale)); draw(); }, {passive:false});
-
-        window.graphZoom = function(f) { scale *= f; scale = Math.max(0.3, Math.min(3, scale)); draw(); };
-        window.graphReset = function() { scale = 1; offsetX = 0; offsetY = 0; draw(); };
-
-        window.addEventListener('resize', resize);
+        canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
+        canvas.addEventListener('mouseleave',()=>{dragging=false;tooltip.classList.add('hidden');});
+        canvas.addEventListener('wheel',e=>{e.preventDefault();const z=e.deltaY<0?1.1:0.9;scale*=z;scale=Math.max(0.25,Math.min(4,scale));draw();},{passive:false});
+        window.graphZoom=f=>{scale*=f;scale=Math.max(0.25,Math.min(4,scale));draw();};
+        window.graphReset=()=>{scale=1;offsetX=0;offsetY=0;draw();};
+        window.addEventListener('resize',resize);
         resize();
     })();
     </script>

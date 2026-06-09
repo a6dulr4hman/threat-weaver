@@ -79,11 +79,14 @@ Reply with EXACTLY ONE JSON object and nothing else (no prose, no markdown):
       "confidence": "Confirmed" | "Likely" | "Possible",
       "evidence": "<the concrete observation that proves it>",
       "impact": "<what an attacker gains>",
-      "remediation": "<the fix in one sentence>"
+      "remediation": "<the fix in one sentence>",
+      "references": ["<URL from brave_search_enrichment if available>"]
     }
   ]
 }
-Order vulnerabilities from most to least severe. Be factual and specific."""
+Order vulnerabilities from most to least severe. Be factual and specific.
+Use the brave_search_enrichment data to add CVE IDs, reference URLs, and
+more precise CVSS scores where the search results provide them."""
 
 
 class FSMState(str, Enum):
@@ -1151,6 +1154,39 @@ class OrchestratorFSM:
                 })
 
         routes = (self.attack_graph.get("code_analysis") or {}).get("routes", [])
+
+        # Enrich findings with Brave Search context (best-effort, non-blocking).
+        # For each distinct vulnerability signal we observed, query Brave for
+        # CVE references, exploit details, and remediation advice so the final
+        # K2 assessment can produce a more detailed, evidence-backed report.
+        enrichment: list[dict] = []
+        try:
+            search_queries = set()
+            for svc in recon_services:
+                if svc.get("version"):
+                    search_queries.add(f"{svc['service']} {svc['version']} CVE exploit")
+            for obs in observed:
+                vuln_type = obs.get("type", "")
+                if vuln_type:
+                    search_queries.add(f"{vuln_type} vulnerability exploit remediation")
+            for patch_name in self.attack_graph.get("patched_nodes", [])[:5]:
+                search_queries.add(f"{patch_name.replace('_', ' ')} vulnerability CVE")
+
+            # Run up to 4 searches in parallel (don't spam the API)
+            limited_queries = list(search_queries)[:4]
+            if limited_queries:
+                results = await asyncio.gather(
+                    *[self.mcp_client.query_hackclub(q, "") for q in limited_queries],
+                    return_exceptions=True,
+                )
+                for query, res in zip(limited_queries, results):
+                    if isinstance(res, dict) and not res.get("error"):
+                        refs = res.get("references", [])[:3]
+                        if refs:
+                            enrichment.append({"query": query, "references": refs})
+        except Exception:
+            pass  # Enrichment failure must not block the assessment.
+
         return {
             "target": await self._get_workspace_target(),
             "heuristic_severity": self._score_severity(),
@@ -1163,6 +1199,7 @@ class OrchestratorFSM:
             ),
             "route_map": [r.get("path") for r in routes],
             "agent_summary": self.attack_graph.get("k2_summary", ""),
+            "brave_search_enrichment": enrichment,
         }
 
     async def _generate_final_assessment(self) -> dict | None:
