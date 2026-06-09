@@ -210,6 +210,15 @@ def download():
 
 
 # --- Admin diagnostics (command injection) ---------------------------------
+@app.route("/admin")
+@login_required
+def admin_home():
+    """Admin console hub linking to the maintenance tools."""
+    return render_template(
+        "admin.html", user=session.get("user"), role=session.get("role")
+    )
+
+
 @app.route("/admin/diagnostics")
 @login_required
 def diagnostics():

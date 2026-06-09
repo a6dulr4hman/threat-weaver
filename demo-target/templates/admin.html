@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nimbus CRM &middot; Admin Console</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f1f5f9; color: #1e293b; }
+        .topbar {
+            background: #fff; border-bottom: 1px solid #e2e8f0; padding: 0 28px;
+            height: 60px; display: flex; align-items: center; justify-content: space-between;
+        }
+        .brand { display: flex; align-items: center; gap: 10px; }
+        .brand .logo {
+            width: 32px; height: 32px; border-radius: 8px;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700;
+        }
+        .brand h1 { font-size: 17px; color: #0f172a; }
+        .nav { display: flex; gap: 22px; }
+        .nav a { color: #475569; text-decoration: none; font-size: 14px; font-weight: 500; }
+        .nav a:hover { color: #3b82f6; }
+        .user { display: flex; align-items: center; gap: 14px; font-size: 14px; color: #475569; }
+        .user a { color: #3b82f6; text-decoration: none; font-weight: 600; }
+        .muted { color: #94a3b8; font-size: 12px; }
+        .container { max-width: 1080px; margin: 28px auto; padding: 0 28px; }
+        h2.section { font-size: 16px; color: #0f172a; margin-bottom: 16px; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+        .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
+        .card h3 { font-size: 15px; color: #0f172a; margin-bottom: 4px; }
+        .card p { font-size: 13px; color: #64748b; margin-bottom: 14px; }
+        .card form { display: flex; gap: 8px; }
+        .card input { flex: 1; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; }
+        .card button { padding: 8px 16px; border: none; border-radius: 8px; background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer; }
+        .card .link { display: inline-block; margin-top: 10px; font-size: 13px; color: #3b82f6; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="brand"><div class="logo">N</div><h1>Nimbus CRM</h1></div>
+        <nav class="nav">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/customers">Customers</a>
+            <a href="/download?file=welcome.txt">Documents</a>
+            <a href="/reports/compute?formula=total_mrr*12">Reports</a>
+            <a href="/admin">Admin</a>
+        </nav>
+        <div class="user">
+            <span>{{ user }} &middot; <span class="muted">{{ role }}</span></span>
+            <a href="/logout">Sign out</a>
+        </div>
+    </div>
+    <div class="container">
+        <h2 class="section">Admin Console</h2>
+        <div class="grid">
+            <div class="card">
+                <h3>Connectivity Diagnostics</h3>
+                <p>Check connectivity to a customer's mail host.</p>
+                <form method="GET" action="/admin/diagnostics">
+                    <input type="text" name="host" value="localhost" placeholder="hostname">
+                    <button type="submit">Run ping</button>
+                </form>
+                <a class="link" href="/admin/diagnostics?host=localhost">Run for localhost &rarr;</a>
+            </div>
+            <div class="card">
+                <h3>Backup Exports</h3>
+                <p>Archive the document export directory with a label.</p>
+                <form method="GET" action="/admin/backup">
+                    <input type="text" name="label" value="manual" placeholder="backup label">
+                    <button type="submit">Start backup</button>
+                </form>
+                <a class="link" href="/admin/backup?label=manual">Run manual backup &rarr;</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

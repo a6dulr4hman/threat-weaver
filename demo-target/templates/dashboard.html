@@ -20,6 +20,16 @@
         .brand h1 { font-size: 17px; color: #0f172a; }
         .user { display: flex; align-items: center; gap: 14px; font-size: 14px; color: #475569; }
         .user a { color: #3b82f6; text-decoration: none; font-weight: 600; }
+        .nav { display: flex; gap: 22px; }
+        .nav a { color: #475569; text-decoration: none; font-size: 14px; font-weight: 500; }
+        .nav a:hover { color: #3b82f6; }
+        .tools { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: #e2e8f0; }
+        .tool { display: block; background: #fff; padding: 18px 20px; text-decoration: none; }
+        .tool:hover { background: #f8fafc; }
+        .tool-title { font-size: 14px; font-weight: 600; color: #0f172a; margin-bottom: 3px; }
+        .tool-sub { font-size: 12px; color: #64748b; }
+        .docs { padding: 6px 20px 16px; }
+        .docs a { display: inline-block; margin: 6px 14px 0 0; color: #3b82f6; text-decoration: none; font-size: 13px; }
         .container { max-width: 1080px; margin: 28px auto; padding: 0 28px; }
         .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
         .stat { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
@@ -47,6 +57,13 @@
 <body>
     <div class="topbar">
         <div class="brand"><div class="logo">N</div><h1>Nimbus CRM</h1></div>
+        <nav class="nav">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/customers">Customers</a>
+            <a href="/download?file=welcome.txt">Documents</a>
+            <a href="/reports/compute?formula=total_mrr*12">Reports</a>
+            <a href="/admin">Admin</a>
+        </nav>
         <div class="user">
             <span>{{ user }} &middot; <span class="muted">{{ role }}</span></span>
             <a href="/logout">Sign out</a>
@@ -57,6 +74,32 @@
             <div class="stat"><div class="label">Total customers</div><div class="value">{{ customers|length }}</div></div>
             <div class="stat"><div class="label">Active accounts</div><div class="value">{{ active }}</div></div>
             <div class="stat"><div class="label">Total MRR</div><div class="value">${{ "{:,}".format(total_mrr) }}</div></div>
+        </div>
+        <div class="panel" style="margin-bottom:24px">
+            <div class="panel-head"><h2>Tools &amp; Reports</h2></div>
+            <div class="tools">
+                <a class="tool" href="/reports/compute?formula=total_mrr*12">
+                    <div class="tool-title">Report Builder</div>
+                    <div class="tool-sub">Project annual revenue from live CRM metrics</div>
+                </a>
+                <a class="tool" href="/download?file=welcome.txt">
+                    <div class="tool-title">Exported Documents</div>
+                    <div class="tool-sub">Download account summaries &amp; revenue reports</div>
+                </a>
+                <a class="tool" href="/admin/diagnostics?host=localhost">
+                    <div class="tool-title">Connectivity Diagnostics</div>
+                    <div class="tool-sub">Check connectivity to a customer mail host</div>
+                </a>
+                <a class="tool" href="/admin/backup?label=manual">
+                    <div class="tool-title">Backup Exports</div>
+                    <div class="tool-sub">Archive the document export directory</div>
+                </a>
+            </div>
+            <div class="docs">
+                <span class="muted">Recent exports:</span>
+                <a href="/download?file=welcome.txt">welcome.txt</a>
+                <a href="/download?file=q1-report.txt">q1-report.txt</a>
+            </div>
         </div>
         <div class="panel">
             <div class="panel-head">
