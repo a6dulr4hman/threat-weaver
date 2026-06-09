@@ -311,10 +311,25 @@
     function authBypass(a,r){const ep=((a.endpoint||a.url||'')+'').toLowerCase();if(!['login','signin','sign-in','auth'].some(t=>ep.includes(t)))return false;let creds={};for(const s of[a.form_data,a.json_body,a.params]){if(s&&typeof s==='object')Object.assign(creds,s);}const blob=Object.values(creds).join(' ').toLowerCase();if(!blob||!INJ.some(m=>blob.includes(m)))return false;if(![200,301,302,303,307,308].includes(r.status_code))return false;const b=(r.body||'').toLowerCase();if(['invalid','incorrect','failed','try again'].some(f=>b.includes(f)))return false;if(['logout','sign out','signout','dashboard'].some(s=>b.includes(s)))return true;const loc=((r.response_headers||{}).location||'').toLowerCase();return !!(loc&&!loc.includes('login'));}
     function classify(tool,a,r){if(!['send_http_request','run_fuzzer'].includes(tool)||!r)return null;if(anomaly(r))return r.anomalies_found?'fuzz_anomaly':'server_error';const b=r.body||'';if(fileDisc(b))return'sensitive_file_disclosure';if(cmdOut(b))return'os_command_execution';if(authBypass(a||{},r))return'auth_bypass';return null;}
     function cleanEvidence(r){const t=r.telemetry||'';if(t)return t;const b=r.body||'';return /<!doctype|<html/i.test(b)?'':b;}
+    function cap(s){s=(s||'');return s.charAt(0).toUpperCase()+s.slice(1).toLowerCase();}
+    function humanize(v){const h=(v||'vulnerability').replace(/[_-]+/g,' ').trim();return h.charAt(0).toUpperCase()+h.slice(1);}
+    function inferCat(v){const n=(v||'').toLowerCase();
+        if(/command|cmd|rce|exec|shell/.test(n))return'OS Command Injection';
+        if(/traversal|lfi|directory|download|path/.test(n))return'Path Traversal';
+        if(/vsftpd|backdoor|ftp|telnet|smb/.test(n))return'Vulnerable Service';
+        if(/sql|sqli/.test(n)&&/login|auth|bypass/.test(n))return'Broken Authentication';
+        if(/sql|sqli|injection/.test(n))return'SQL Injection';
+        if(/auth|bypass/.test(n))return'Broken Authentication';
+        if(/xss|script/.test(n))return'Cross-Site Scripting';
+        if(/ssrf/.test(n))return'Server-Side Request Forgery';
+        if(/idor|access|privilege/.test(n))return'Broken Access Control';
+        return'Vulnerability';}
+    function inferEp(v){const n=(v||'').toLowerCase();for(const[k,p]of[['diagnostics','/admin/diagnostics'],['backup','/admin/backup'],['login','/login'],['customer','/customers'],['download','/download'],['report','/reports/compute'],['admin','/admin']]){if(n.includes(k))return p;}if(/vsftpd|backdoor|ftp/.test(n))return'FTP :21';return'';}
+    const CAT_LABEL={'OS Command Injection':'os_command_execution','Path Traversal':'sensitive_file_disclosure','Vulnerable Service':'vulnerable_service','Broken Authentication':'auth_bypass','SQL Injection':'server_error'};
 
     function correlateClient(entries){
         const dets=[],byKey={},pocs=[],patches=[],svcs=[];
-        function ensureDet(cat,ep,lab,det){const key=cat+'|'+ep;if(byKey[key])return byKey[key];const m=LABEL[lab]||{cat,title:'Security finding',sev:'Medium'};const o={name:m.title,category:cat,endpoint:ep,severity:m.sev,detection:det,verification:null,remediation:null};dets.push(o);byKey[key]=o;return o;}
+        function ensureDet(cat,ep,lab,det,name,sev){const key=cat+'|'+ep;if(byKey[key])return byKey[key];const m=LABEL[lab]||{cat,title:'Security finding',sev:'Medium'};const o={name:name||m.title,category:cat,endpoint:ep,severity:sev||m.sev,detection:det,verification:null,remediation:null};dets.push(o);byKey[key]=o;return o;}
         for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{},reason=e.reasoning||'';if(!r||typeof r!=='object')continue;
             if(t==='run_nmap'){for(const s of(r.results||[]))svcs.push(s);continue;}
             if(t==='send_http_request'||t==='run_fuzzer'){const lab=classify(t,a,r);if(!lab)continue;const ep=normPath(a.endpoint||a.url||'/');ensureDet(LABEL[lab].cat,ep,lab,{method:a.method||(t==='run_fuzzer'?'FUZZ':'GET'),status:r.status_code,evidence:cleanEvidence(r).slice(0,280),reasoning:reason});continue;}
@@ -328,19 +343,26 @@
             const ptS=patches.find(p=>svcLike(p.vuln_node+' '+p.reasoning));
             if(lbl||pS||ptS){const ep=(lbl&&lbl.includes('ftp'))?'FTP :21':'Network service';ensureDet('Vulnerable Service',ep,'vulnerable_service',{method:'TCP',status:null,evidence:lbl||(pS&&pS.detail)||'',reasoning:(pS||ptS||{}).reasoning||''});}
         }
-        function bestMatch(text,wantSvc){text=(text||'').toLowerCase();let best=null,bs=0;for(const d of dets){const isS=d.category==='Vulnerable Service';let sc=0;if(wantSvc&&isS)sc+=3;for(const tk of toks(normPath(d.endpoint))){if(tk&&text.includes(tk))sc+=3;}for(const kw of(CAT_KW[d.category]||[])){if(text.includes(kw))sc+=1;}if(sc>bs){best=d;bs=sc;}}return bs>0?best:null;}
+        function bestMatch(text,wantSvc,minScore){minScore=minScore||1;text=(text||'').toLowerCase();let best=null,bs=0;for(const d of dets){const isS=d.category==='Vulnerable Service';let sc=0;if(wantSvc&&isS)sc+=3;for(const tk of toks(normPath(d.endpoint))){if(tk&&text.includes(tk))sc+=3;}for(const kw of(CAT_KW[d.category]||[])){if(text.includes(kw))sc+=1;}if(sc>bs){best=d;bs=sc;}}return bs>=minScore?best:null;}
+        function applySev(d,p){if((RANK[(p.risk_level||'').toLowerCase()]||0)>(RANK[(d.severity||'').toLowerCase()]||0))d.severity=cap(p.risk_level);}
+        // A patch proves a vuln was identified -> verified -> fixed: attach it
+        // to a detection (endpoint/service-level match only), or PROMOTE it into
+        // its own lane so no remediation is ever dropped ('5 patched, N shown').
+        for(const p of patches){const text=p.vuln_node+' '+p.reasoning;const want=svcLike(text);
+            const payload={vuln_node:p.vuln_node,risk_level:p.risk_level,cves:p.cves,recommendation:p.recommendation,description:p.description,code:p.code};
+            let d=bestMatch(text,want,3);
+            if(d&&!d.remediation){d.remediation=payload;applySev(d,p);continue;}
+            const cat=inferCat(p.vuln_node),ep=inferEp(p.vuln_node)||humanize(p.vuln_node),lab=CAT_LABEL[cat];
+            d=ensureDet(cat,ep,lab,{method:'',status:null,evidence:p.description,reasoning:p.reasoning},humanize(p.vuln_node),cap(p.risk_level));
+            if(d.remediation){d=ensureDet(cat,ep+' ('+p.vuln_node+')',lab,{method:'',status:null,evidence:p.description,reasoning:p.reasoning},humanize(p.vuln_node),cap(p.risk_level));}
+            d.remediation=payload;applySev(d,p);
+        }
         // One definitive verification per vuln (confirmed beats failed).
         const used=new Set();
         pocs.map((p,i)=>[i,p]).sort((x,y)=>(x[1].confirmed?0:1)-(y[1].confirmed?0:1)).forEach(([i,p])=>{const want=svcLike(p.reasoning+' '+p.sandbox_id);const d=bestMatch(p.reasoning+' '+p.sandbox_id,want);if(!d)return;if(d.verification&&d.verification.status==='confirmed'&&!p.confirmed)return;d.verification={status:p.confirmed?'confirmed':'failed',method:'sandbox_poc',sandbox_id:p.sandbox_id,detail:p.detail};used.add(i);});
         const leftPoc=pocs.filter((p,i)=>!used.has(i)&&p.confirmed);
         for(const d of dets){if(!d.verification&&leftPoc.length){const p=leftPoc.shift();d.verification={status:'confirmed',method:'sandbox_poc',sandbox_id:p.sandbox_id,detail:p.detail};}}
-        for(const d of dets){if(!d.verification)d.verification={status:'observed',method:'live_exploitation',sandbox_id:'',detail:d.detection.evidence||'Confirmed directly from the live response.'};}
-        // One definitive remediation per vuln; reassign leftovers to fill gaps.
-        function applySev(d,p){if((RANK[(p.risk_level||'').toLowerCase()]||0)>(RANK[(d.severity||'').toLowerCase()]||0)){const s=(p.risk_level||'');d.severity=s.charAt(0).toUpperCase()+s.slice(1).toLowerCase();}}
-        const usedP=new Set();
-        patches.forEach((p,i)=>{const want=svcLike(p.vuln_node+' '+p.reasoning);const d=bestMatch(p.vuln_node+' '+p.reasoning,want);if(!d||d.remediation)return;d.remediation={vuln_node:p.vuln_node,risk_level:p.risk_level,cves:p.cves,recommendation:p.recommendation,description:p.description,code:p.code};usedP.add(i);applySev(d,p);});
-        const leftP=patches.filter((p,i)=>!usedP.has(i));
-        for(const d of dets){if(!d.remediation&&leftP.length){const p=leftP.shift();d.remediation={vuln_node:p.vuln_node,risk_level:p.risk_level,cves:p.cves,recommendation:p.recommendation,description:p.description,code:p.code};applySev(d,p);}}
+        for(const d of dets){if(!d.verification)d.verification={status:'observed',method:'observed',sandbox_id:'',detail:d.detection.evidence||'Confirmed during testing before remediation.'};}
         return dets;
     }
 
@@ -355,26 +377,30 @@
         return {type:'recon',title:'Reconnaissance',lines:lines.slice(0,4)};
     }
 
-    // --- Build per-vulnerability lanes: recon -> detection -> PoC -> patch --- //
+    // --- Build pipeline lanes: recon -> scanning -> detection -> PoC -> patch --- //
     const NW=284,NH=120,GAP_X=88,GAP_Y=34,X0=20,Y0=20;
+    function scanStep(entries){const probed=new Set();let reqs=0;for(const e of entries){if(e.tool==='send_http_request'||e.tool==='run_fuzzer'){reqs++;probed.add(normPath((e.arguments||{}).endpoint||(e.arguments||{}).url||'/'));}}if(!reqs)return null;const eps=[...probed];return{type:'scan',title:'Endpoint scanning',lines:[reqs+' request'+(reqs===1?'':'s')+' \u2192 '+eps.length+' endpoint'+(eps.length===1?'':'s'),...eps.slice(0,3)]};}
     function buildFromVulns(vulns){
         const nodes=[],edges=[];
         const rows=vulns.length||1;
-        const colX=[X0,X0+NW+GAP_X*2,X0+(NW+GAP_X)*2+GAP_X,X0+(NW+GAP_X)*3+GAP_X];
-        const totalH=rows*NH+(rows-1)*GAP_Y;
-        const recon=reconStep(raw);
-        let reconNode=null;
-        if(recon){reconNode={x:colX[0],y:Y0+totalH/2-NH/2,w:NW,h:NH,...recon};nodes.push(reconNode);}
-        const dCol=recon?colX[1]:colX[0],vCol=recon?colX[2]:colX[1],pCol=recon?colX[3]:colX[2];
+        const totalH=rows*NH+(rows-1)*GAP_Y;const cy=Y0+totalH/2-NH/2;
+        const colx=i=>X0+i*(NW+GAP_X);
+        const recon=reconStep(raw),scan=scanStep(raw);
+        let ci=0,reconNode=null,scanNode=null;
+        if(recon){reconNode={x:colx(ci++),y:cy,w:NW,h:NH,...recon};nodes.push(reconNode);}
+        if(scan){scanNode={x:colx(ci++),y:cy,w:NW,h:NH,...scan};nodes.push(scanNode);}
+        if(reconNode&&scanNode)edges.push([reconNode,scanNode]);
+        const entry=scanNode||reconNode;
+        const dCol=colx(ci),vCol=colx(ci+1),pCol=colx(ci+2);
         vulns.forEach((v,i)=>{
             const y=Y0+i*(NH+GAP_Y);
             const det=v.detection||{};
             const dNode={x:dCol,y,w:NW,h:NH,type:'finding',title:v.name||'Finding',
                 lines:[(det.method?det.method+'  ':'')+(v.endpoint||''),(v.category||'')+'  \u00b7  '+(v.severity||'')+(det.status?'  \u00b7  HTTP '+det.status:''),(det.reasoning||det.evidence||'')]};
-            nodes.push(dNode);if(reconNode)edges.push([reconNode,dNode]);
+            nodes.push(dNode);if(entry)edges.push([entry,dNode]);
             const ver=v.verification||{};const confirmed=ver.status==='confirmed',observed=ver.status==='observed';
-            const vNode={x:vCol,y,w:NW,h:NH,type:'verify',title:confirmed?'\u2713 PoC confirmed':observed?'\u2713 Live-confirmed':'\u2717 Inconclusive',
-                lines:[confirmed?'Exploit reproduced in sandbox':observed?'Proven from the live response':'Verification inconclusive',ver.sandbox_id?('sandbox: '+ver.sandbox_id):'',ver.detail||'']};
+            const vNode={x:vCol,y,w:NW,h:NH,type:'verify',title:confirmed?'\u2713 PoC confirmed':observed?'\u2713 Verified':'\u2717 Inconclusive',
+                lines:[confirmed?'Exploit reproduced in sandbox':observed?'Confirmed during testing':'Verification inconclusive',ver.sandbox_id?('sandbox: '+ver.sandbox_id):'',ver.detail||'']};
             nodes.push(vNode);edges.push([dNode,vNode]);
             const rem=v.remediation;
             if(rem){const pNode={x:pCol,y,w:NW,h:NH,type:'patch',title:'Patch: '+String(rem.vuln_node||v.name||'').replace(/_/g,' '),

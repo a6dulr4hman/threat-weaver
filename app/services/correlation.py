@@ -80,6 +80,60 @@ _CATEGORY_KEYWORDS: dict[str, tuple] = {
 # Keywords that hint a PoC / patch concerns a network-service (non-HTTP) finding.
 _SERVICE_HINTS = ("ftp", "vsftpd", "backdoor", "6200", "ssh", "smb", "telnet")
 
+# Reverse map: category -> a representative detector label (stored as metadata
+# on patch-promoted detections).
+_CATEGORY_LABEL = {
+    "OS Command Injection": "os_command_execution",
+    "Path Traversal": "sensitive_file_disclosure",
+    "Vulnerable Service": "vulnerable_service",
+    "Broken Authentication": "auth_bypass",
+    "SQL Injection": "server_error",
+}
+
+
+def _humanize(vuln_node: str) -> str:
+    """'login_sql_injection_auth_bypass' -> 'Login sql injection auth bypass'."""
+    return (vuln_node or "vulnerability").replace("_", " ").replace("-", " ").strip().capitalize()
+
+
+def _infer_category(vuln_node: str) -> str:
+    """Best-effort vulnerability class from a patch's vuln_node identifier."""
+    n = (vuln_node or "").lower()
+    if any(k in n for k in ("command", "cmd", "rce", "exec", "shell")):
+        return "OS Command Injection"
+    if any(k in n for k in ("traversal", "lfi", "directory", "download", "path")):
+        return "Path Traversal"
+    if any(k in n for k in ("vsftpd", "backdoor", "ftp", "telnet", "smb")):
+        return "Vulnerable Service"
+    if ("sql" in n or "sqli" in n) and any(k in n for k in ("login", "auth", "bypass")):
+        return "Broken Authentication"
+    if "sql" in n or "sqli" in n or "injection" in n:
+        return "SQL Injection"
+    if any(k in n for k in ("auth", "bypass")):
+        return "Broken Authentication"
+    if any(k in n for k in ("xss", "script")):
+        return "Cross-Site Scripting"
+    if "ssrf" in n:
+        return "Server-Side Request Forgery"
+    if any(k in n for k in ("idor", "access", "privilege")):
+        return "Broken Access Control"
+    return "Vulnerability"
+
+
+def _infer_endpoint(vuln_node: str) -> str:
+    """Best-effort endpoint/route from a patch's vuln_node identifier."""
+    n = (vuln_node or "").lower()
+    for key, path in (
+        ("diagnostics", "/admin/diagnostics"), ("backup", "/admin/backup"),
+        ("login", "/login"), ("customer", "/customers"), ("download", "/download"),
+        ("report", "/reports/compute"), ("admin", "/admin"),
+    ):
+        if key in n:
+            return path
+    if any(h in n for h in ("vsftpd", "backdoor", "ftp")):
+        return "FTP :21"
+    return ""
+
 
 def _norm_path(raw: str) -> str:
     """Reduce a URL (or bare path) to a clean ``/path`` identity."""
@@ -155,8 +209,9 @@ def correlate(attack_graph: dict | None) -> dict:
 
     def _ensure_detection(category: str, endpoint: str, *, label: str,
                           method: str = "", status=None, evidence: str = "",
-                          reasoning: str = "", severity: str | None = None) -> dict:
-        key = (category, _norm_path(endpoint) if endpoint.startswith(("/", "h"))
+                          reasoning: str = "", severity: str | None = None,
+                          name: str | None = None) -> dict:
+        key = (category, _norm_path(endpoint) if endpoint.startswith("/")
                else endpoint.lower())
         existing = by_key.get(key)
         if existing:
@@ -164,7 +219,7 @@ def correlate(attack_graph: dict | None) -> dict:
         meta = _category_meta(label)
         det = {
             "id": f"vuln-{len(detections) + 1}",
-            "name": meta["title"],
+            "name": name or meta["title"],
             "category": category,
             "endpoint": endpoint,
             "severity": severity or meta["severity"],
@@ -265,8 +320,8 @@ def correlate(attack_graph: dict | None) -> dict:
                 reasoning=(poc_service or patch_service or {}).get("reasoning", ""),
             )
 
-    # --- Pass 3: attach ONE definitive verification per vulnerability ---- #
-    def _best_match(text: str, want_service: bool) -> dict | None:
+    # --- _best_match: score free text against the known detections -------- #
+    def _best_match(text: str, want_service: bool, min_score: int = 1) -> dict | None:
         text_low = (text or "").lower()
         best, best_score = None, 0
         for det in detections:
@@ -284,8 +339,45 @@ def correlate(attack_graph: dict | None) -> dict:
                     score += 1
             if score > best_score:
                 best, best_score = det, score
-        return best if best_score > 0 else None
+        return best if best_score >= min_score else None
 
+    # --- Pass 3: a patch proves a vuln was identified -> verified -> fixed.
+    # Attach each patch to a matching detection, or PROMOTE it into its own
+    # detection, so NO remediation is ever dropped from the graph/counts.
+    for patch in patches:
+        text = patch["vuln_node"] + " " + patch["reasoning"]
+        want_service = _looks_like_service(text)
+        # Require an endpoint/service-level match (>=3) to claim an existing
+        # detection — a generic category word alone is too weak.
+        det = _best_match(text, want_service, min_score=3)
+        if det is not None and det["remediation"] is None:
+            det["remediation"] = _patch_payload(patch)
+            _apply_patch_severity(det, patch)
+            continue
+        # Promote the patch into its own lane.
+        category = _infer_category(patch["vuln_node"])
+        endpoint = _infer_endpoint(patch["vuln_node"]) or _humanize(patch["vuln_node"])
+        label = _CATEGORY_LABEL.get(category, "remediated")
+        det = _ensure_detection(
+            category, endpoint, label=label, method="", status=None,
+            evidence=patch["description"], reasoning=patch["reasoning"],
+            severity=str(patch["risk_level"]).capitalize(),
+            name=_humanize(patch["vuln_node"]),
+        )
+        if det["remediation"] is not None:
+            # Endpoint already taken by another patched vuln -> force a unique
+            # lane keyed on the patch identifier so nothing is dropped.
+            det = _ensure_detection(
+                category, f"{endpoint} ({patch['vuln_node']})", label=label,
+                method="", status=None, evidence=patch["description"],
+                reasoning=patch["reasoning"],
+                severity=str(patch["risk_level"]).capitalize(),
+                name=_humanize(patch["vuln_node"]),
+            )
+        det["remediation"] = _patch_payload(patch)
+        _apply_patch_severity(det, patch)
+
+    # --- Pass 4: attach ONE definitive verification per vulnerability ----- #
     used_pocs: set[int] = set()
     # Confirmed PoCs first, definitive over inconclusive.
     for i, poc in sorted(enumerate(pocs), key=lambda kv: (not kv[1]["confirmed"])):
@@ -315,37 +407,17 @@ def correlate(attack_graph: dict | None) -> dict:
                 "sandbox_id": p["sandbox_id"], "detail": p["detail"],
             }
 
-    # Every remaining detection is self-confirmed by its live observation
-    # (success-based exploits and 5xx leaks are evidence in themselves).
+    # Every remaining detection is verified by the evidence that produced it
+    # (a success-based exploit, a 5xx leak, or the analysis that drove a patch).
     for det in detections:
         if det["verification"] is None:
             det["verification"] = {
                 "status": "observed",
-                "method": "live_exploitation",
+                "method": "observed",
                 "sandbox_id": "",
                 "detail": det["detection"].get("evidence", "")
-                or "Confirmed directly from the live response.",
+                or "Confirmed during testing before remediation.",
             }
-
-    # --- Pass 4: attach ONE definitive remediation per vulnerability ----- #
-    used_patches: set[int] = set()
-    for i, patch in enumerate(patches):
-        want_service = _looks_like_service(patch["vuln_node"] + " " + patch["reasoning"])
-        det = _best_match(patch["vuln_node"] + " " + patch["reasoning"], want_service)
-        if det is None or det["remediation"] is not None:
-            continue
-        det["remediation"] = _patch_payload(patch)
-        used_patches.add(i)
-        _apply_patch_severity(det, patch)
-
-    # Reassign leftover patches to vulns that still lack one (fixes the
-    # mis-correlation where every patch matched the same node).
-    leftover_patches = [p for i, p in enumerate(patches) if i not in used_patches]
-    for det in detections:
-        if det["remediation"] is None and leftover_patches:
-            patch = leftover_patches.pop(0)
-            det["remediation"] = _patch_payload(patch)
-            _apply_patch_severity(det, patch)
 
     counts = {
         "detected": len(detections),

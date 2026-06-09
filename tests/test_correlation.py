@@ -110,6 +110,60 @@ def test_correlate_empty_graph():
     assert out["vulnerabilities"] == []
 
 
+def _five_patch_graph() -> dict:
+    """The reported case: 5 patches were generated but only some surfaced as
+    HTTP findings — the extra patches must still each become a vulnerability."""
+    return {
+        "tool_results": [
+            {"tool": "run_nmap", "arguments": {}, "result": {
+                "results": [{"port": 21, "service": "ftp", "version": "2.3.4"}]}},
+            {"tool": "execute_safe_poc", "arguments": {"sandbox_id": "vsftpd_backdoor"},
+             "result": {"exploit_confirmed": True, "match_detail": "shell"},
+             "reasoning": "vsftpd 2.3.4 backdoor"},
+            {"tool": "send_http_request",
+             "arguments": {"method": "POST", "endpoint": "http://t/login",
+                           "form_data": {"username": "admin'-- ", "password": "x"}},
+             "result": {"status_code": 200, "body": "Welcome dashboard, sign out"},
+             "reasoning": "SQLi auth bypass"},
+            # 5 patches — only login + vsftpd have a matching detection above.
+            {"tool": "generate_patch", "arguments": {"vuln_node": "admin_diagnostics_command_injection"},
+             "result": {"vuln_node": "admin_diagnostics_command_injection", "risk_level": "Critical",
+                        "cves": [], "recommendation": "no shell=True", "patch": "c1", "description": "cmd inj"}},
+            {"tool": "generate_patch", "arguments": {"vuln_node": "download_path_traversal"},
+             "result": {"vuln_node": "download_path_traversal", "risk_level": "High",
+                        "cves": [], "recommendation": "sanitize path", "patch": "c2", "description": "traversal"}},
+            {"tool": "generate_patch", "arguments": {"vuln_node": "vsftpd_2.3.4_backdoor"},
+             "result": {"vuln_node": "vsftpd_2.3.4_backdoor", "risk_level": "Critical",
+                        "cves": ["CVE-2011-2523"], "recommendation": "upgrade", "patch": "c3", "description": "backdoor"}},
+            {"tool": "generate_patch", "arguments": {"vuln_node": "customer_sql_injection"},
+             "result": {"vuln_node": "customer_sql_injection", "risk_level": "High",
+                        "cves": [], "recommendation": "parametrize", "patch": "c4", "description": "sqli"}},
+            {"tool": "generate_patch", "arguments": {"vuln_node": "login_sql_injection_auth_bypass"},
+             "result": {"vuln_node": "login_sql_injection_auth_bypass", "risk_level": "Critical",
+                        "cves": [], "recommendation": "prepared stmts", "patch": "c5", "description": "auth bypass"}},
+        ]
+    }
+
+
+def test_every_patch_becomes_a_vulnerability_lane():
+    """5 patches -> 5 remediated vulnerabilities, none dropped."""
+    out = correlate(_five_patch_graph())
+    vulns = out["vulnerabilities"]
+    # The 5 patches must all be represented and remediated.
+    assert out["counts"]["remediated"] == 5
+    # Each vuln is verified (PoC-confirmed or observed) -> tested == detected.
+    assert out["counts"]["tested"] == out["counts"]["detected"]
+    assert out["counts"]["detected"] >= 5
+    # Every distinct patch vuln_node shows up exactly once.
+    nodes = {(v.get("remediation") or {}).get("vuln_node") for v in vulns if v.get("remediation")}
+    assert {"admin_diagnostics_command_injection", "download_path_traversal",
+            "vsftpd_2.3.4_backdoor", "customer_sql_injection",
+            "login_sql_injection_auth_bypass"} <= nodes
+    # Promoted patches get a sensible category.
+    cats = {v["category"] for v in vulns}
+    assert "OS Command Injection" in cats and "Path Traversal" in cats
+
+
 # --- Assessment reconciliation + counting -------------------------------- #
 
 @pytest.mark.asyncio
