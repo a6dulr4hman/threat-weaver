@@ -101,18 +101,26 @@ if curl -fsSL --max-time 60 \
     -o vsftpd-src.tar.gz; then
 
     tar xzf vsftpd-src.tar.gz
-    cd vsftpd-2.3.4-infected-master
-
-    # Fix for modern glibc (libcrypt split out)
-    sed -i 's|^LIBS\s*=.*|& -lcrypt|' Makefile 2>/dev/null || true
-
-    if make -j"$(nproc)" 2>&1 | tail -3; then
-        cp vsftpd /usr/local/sbin/vsftpd_234
-        chmod 755 /usr/local/sbin/vsftpd_234
-        VSFTPD_OK=true
-        echo "    Built successfully: /usr/local/sbin/vsftpd_234"
+    # The extracted directory name varies (e.g. vsftpd-2.3.4-infected-master or
+    # vsftpd-2.3.4-infected-vsftpd_original depending on the default branch).
+    # Just find and enter whatever single directory was extracted.
+    VSFTPD_DIR="$(find . -maxdepth 1 -type d -name 'vsftpd-2.3.4*' | head -1)"
+    if [ -z "$VSFTPD_DIR" ]; then
+        echo "    ERROR: could not find extracted vsftpd directory."
     else
-        echo "    ERROR: compilation failed."
+        cd "$VSFTPD_DIR"
+
+        # Fix for modern glibc (libcrypt split out)
+        sed -i 's|^LIBS\s*=.*|& -lcrypt|' Makefile 2>/dev/null || true
+
+        if make -j"$(nproc)" 2>&1 | tail -3; then
+            cp vsftpd /usr/local/sbin/vsftpd_234
+            chmod 755 /usr/local/sbin/vsftpd_234
+            VSFTPD_OK=true
+            echo "    Built successfully: /usr/local/sbin/vsftpd_234"
+        else
+            echo "    ERROR: compilation failed."
+        fi
     fi
 else
     echo "    ERROR: could not download source tarball."
