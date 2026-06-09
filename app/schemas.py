@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import ipaddress
 import re
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -67,7 +69,7 @@ class JobResponse(BaseModel):
     id: str
     workspace_id: str
     status: str
-    overall_severity: str | None = None
+    overall_severity: Optional[str] = None
     attack_graph_data: Any = None
 
     model_config = {"from_attributes": True}
@@ -77,7 +79,7 @@ class MitigationResponse(BaseModel):
     id: str
     job_id: str
     vulnerability_node: str
-    remediation_code: str | None = None
+    remediation_code: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

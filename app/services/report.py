@@ -4,6 +4,8 @@ ReportService turns a job's attack graph + stored mitigations into a polished,
 downloadable PDF: executive summary, severity, confirmed findings, exposed
 services, and the full remediation code for each patched vulnerability.
 """
+from __future__ import annotations
+
 import asyncio
 import os
 import re

@@ -5,6 +5,8 @@ K2-Think-v2 is a reasoning model: it often "thinks out loud" (sometimes inside
 wrapped in markdown fences. These helpers extract a JSON object from such
 free-form replies. Used by the K2 agent for parsing tool-call decisions.
 """
+from __future__ import annotations
+
 import json
 import re
 

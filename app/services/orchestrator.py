@@ -1,4 +1,6 @@
 """FSM-based orchestrator with K2-Think-v2 agentic loop."""
+from __future__ import annotations
+
 import asyncio
 import json
 import os

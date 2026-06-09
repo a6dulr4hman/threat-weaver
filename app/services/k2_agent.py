@@ -6,6 +6,7 @@ It utilizes the K2-Think-v2 model to perform a continuous Chain-of-Thought (CoT)
 reasoning loop (ReAct). The agent is explicitly constrained to output actionable JSON
 tool requests after its internal <think> process, preventing infinite hallucination loops.
 """
+from __future__ import annotations
 
 import json
 from typing import Dict, Any

@@ -1,4 +1,6 @@
 """Code ingestion, AST analysis, and vulnerability deduplication."""
+from __future__ import annotations
+
 import ast
 import hashlib
 import os

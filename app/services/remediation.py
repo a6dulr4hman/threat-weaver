@@ -1,4 +1,6 @@
 """Blue team patch synthesis and syntax validation."""
+from __future__ import annotations
+
 import ast
 import re
 import uuid

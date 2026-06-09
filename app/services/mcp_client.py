@@ -1,4 +1,6 @@
 """MCP tool dispatcher - each tool is a discrete async function."""
+from __future__ import annotations
+
 import asyncio
 import os
 import time

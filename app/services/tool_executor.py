@@ -1,4 +1,6 @@
 """Executes tool calls decided by K2 agent."""
+from __future__ import annotations
+
 from app.services.llm_client import LLMClient
 from app.services.mcp_client import MCPClient
 from app.services.remediation import RemediationService
