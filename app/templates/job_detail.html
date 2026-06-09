@@ -12,6 +12,15 @@
             <p class="font-mono text-xs text-ink-200 mt-1.5">{{ job.id }}</p>
         </div>
         <div class="flex items-center gap-3">
+            {% set started_at = job.attack_graph_data.started_at if job.attack_graph_data else None %}
+            {% set completed_at = job.attack_graph_data.completed_at if job.attack_graph_data else None %}
+            <span id="scanTimer"
+                  class="badge badge-neutral badge-mono tabular-nums {% if not started_at %}hidden{% endif %}"
+                  data-started="{{ started_at or '' }}"
+                  data-completed="{{ completed_at or '' }}">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span id="scanTimerValue">00:00</span>
+            </span>
             {% if job.status in ["pending", "ready"] %}
             <button id="start-job-btn" class="btn btn-primary btn-sm">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -464,16 +473,19 @@
         function updateStepper(phase,isComplete){
             const el=document.getElementById('pipelineStepper');if(!el)return;
             const idx=isComplete?STATES.length:(STATES.indexOf(phase)>=0?STATES.indexOf(phase):0);
+            const prevIdx=parseInt(el.dataset.idx||'-1',10);
             const steps=el.querySelectorAll('[data-step]');
             steps.forEach((s,i)=>{
                 const circle=s.querySelector('[data-circle]');const line=s.querySelector('[data-line]');const label=s.querySelector('[data-label]');
                 if(!circle)return;
+                const advanced=i<=idx&&i>prevIdx;  // pop only steps that newly changed
                 if(i<idx){circle.className='w-6 h-6 rounded-full bg-white flex items-center justify-center';circle.innerHTML='<svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-ink-100';}
                 else if(i===idx){circle.className='w-6 h-6 rounded-full bg-white flex items-center justify-center pulse-ring';circle.innerHTML='<div class="w-2 h-2 rounded-full bg-black"></div>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-white font-medium';}
                 else{circle.className='w-6 h-6 rounded-full border border-ink-700 flex items-center justify-center';circle.innerHTML='<div class="w-1 h-1 rounded-full bg-ink-600"></div>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-ink-400';}
+                if(advanced){circle.classList.add('step-pop');setTimeout(()=>circle.classList.remove('step-pop'),450);}
                 if(line){line.className='flex-1 mx-1.5 h-px hidden sm:block '+(i<idx?'bg-white':'bg-ink-800');}
             });
-            el.dataset.phase=phase;
+            el.dataset.phase=phase;el.dataset.idx=String(idx);
         }
 
         async function fetchMitigations(){
@@ -485,7 +497,7 @@
                 const c=document.getElementById('mitigationsContainer');if(!c)return;
                 const sevBadge={critical:'badge-red',high:'badge-orange',medium:'badge-yellow',low:'badge-green'};
                 c.innerHTML=mits.map(m=>{const meta=m.finding_metadata||{};const risk=(meta.risk_level||'High').toLowerCase();const badge=sevBadge[risk]||'badge-neutral';
-                    return '<div class="surface-inset overflow-hidden"><div class="flex items-center justify-between px-5 py-4 border-b border-white/10"><div class="flex items-center gap-3 min-w-0"><svg class="w-4 h-4 flex-shrink-0" style="color:#fb923c" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg><span class="font-semibold text-white truncate">'+esc(m.vulnerability_node)+'</span></div><span class="badge '+badge+' ml-4 flex-shrink-0">'+(meta.risk_level||'High').toUpperCase()+'</span></div><div class="px-5 py-4 space-y-4">'
+                    return '<div class="surface-inset overflow-hidden mit-in"><div class="flex items-center justify-between px-5 py-4 border-b border-white/10"><div class="flex items-center gap-3 min-w-0"><svg class="w-4 h-4 flex-shrink-0" style="color:#fb923c" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg><span class="font-semibold text-white truncate">'+esc(m.vulnerability_node)+'</span></div><span class="badge '+badge+' ml-4 flex-shrink-0">'+(meta.risk_level||'High').toUpperCase()+'</span></div><div class="px-5 py-4 space-y-4">'
                     +(meta.description?'<div><p class="eyebrow mb-1">What is this issue?</p><p class="text-sm text-ink-100 leading-relaxed">'+esc(meta.description)+'</p></div>':'')
                     +(meta.cves&&meta.cves.length?'<div><p class="eyebrow mb-1.5">CVE references</p><div class="flex flex-wrap gap-2">'+meta.cves.map(c=>'<span class="badge badge-red badge-mono">'+esc(c)+'</span>').join('')+'</div></div>':'')
                     +(meta.recommendation?'<div><p class="eyebrow mb-1">Recommended fix</p><p class="text-sm text-ink-100 leading-relaxed">'+esc(meta.recommendation)+'</p></div>':'')
@@ -506,9 +518,12 @@
             if(JSON.stringify(nv)!==JSON.stringify(VULNS)){VULNS=nv;changed=true;}
             if(changed){rebuild();scale=fitScale();clampView();}
             // Live token counter
-            const tu=ag.token_usage;if(tu){const f=n=>(n||0).toLocaleString();const el=id=>document.getElementById(id);
-                if(el('tkTotal'))el('tkTotal').textContent=f(tu.total_tokens);if(el('tkPrompt'))el('tkPrompt').textContent=f(tu.prompt_tokens);
-                if(el('tkComp'))el('tkComp').textContent=f(tu.completion_tokens);if(el('tkCalls'))el('tkCalls').textContent=tu.llm_calls||0;}
+            // Live token counter (animated count-up + flash)
+            const tu=ag.token_usage;if(tu){const el=id=>document.getElementById(id);
+                if(el('tkTotal'))window.__animateNum(el('tkTotal'),tu.total_tokens);if(el('tkPrompt'))window.__animateNum(el('tkPrompt'),tu.prompt_tokens);
+                if(el('tkComp'))window.__animateNum(el('tkComp'),tu.completion_tokens);if(el('tkCalls'))window.__animateNum(el('tkCalls'),tu.llm_calls);}
+            // Live scan timer
+            if(window.__updateScanTimer)window.__updateScanTimer(ag.started_at,ag.completed_at);
             const st=document.getElementById('graphSteps');if(st)st.textContent=nr.length+' steps';
             // Live mitigations
             await fetchMitigations();
@@ -638,6 +653,61 @@
     <p class="text-xs text-ink-400 mt-2">Counts every K2-Think-v2 call: agent reasoning, patch synthesis, and final assessment.</p>
 </section>
 {% endif %}
+
+<script>
+// --- Scan duration timer ------------------------------------------------ //
+(function(){
+    const el = document.getElementById('scanTimer');
+    if (!el) return;
+    const val = document.getElementById('scanTimerValue');
+    let started = parseFloat(el.dataset.started) || 0;
+    let completed = parseFloat(el.dataset.completed) || 0;
+    let timer = null;
+    function fmt(sec){
+        sec = Math.max(0, Math.floor(sec));
+        const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+        const mm = String(m).padStart(2,'0'), ss = String(s).padStart(2,'0');
+        return h>0 ? (h+':'+mm+':'+ss) : (mm+':'+ss);
+    }
+    function render(){
+        if (!started) { el.classList.add('hidden'); return; }
+        el.classList.remove('hidden');
+        if (completed) {
+            val.textContent = fmt(completed - started);
+            el.classList.remove('badge-neutral'); el.classList.add('badge-green');
+            if (timer) { clearInterval(timer); timer = null; }
+        } else {
+            val.textContent = fmt(Date.now()/1000 - started);
+        }
+    }
+    // Let the poll loop feed fresh timestamps in.
+    window.__updateScanTimer = function(s, c){
+        if (s && !started) started = s;
+        if (c) completed = c;
+        if (started && !completed && !timer) timer = setInterval(render, 1000);
+        render();
+    };
+    render();
+    if (started && !completed) timer = setInterval(render, 1000);
+})();
+
+// --- Animated number count-up (token counter) --------------------------- //
+window.__animateNum = function(el, to){
+    if (!el) return;
+    const from = parseInt((el.textContent||'0').replace(/[^0-9]/g,''), 10) || 0;
+    to = to || 0;
+    if (from === to) return;
+    el.classList.remove('tk-flash'); void el.offsetWidth; el.classList.add('tk-flash');
+    const dur = 600, t0 = performance.now();
+    function step(now){
+        const p = Math.min(1, (now - t0) / dur);
+        const eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = Math.round(from + (to - from) * eased).toLocaleString();
+        if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+};
+</script>
 
 <script>
 // Start Scan button — show immediate feedback + kick off polling.
