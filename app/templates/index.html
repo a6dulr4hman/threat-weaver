@@ -72,15 +72,21 @@
 <script>
 document.getElementById('create-workspace-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const form = e.target;
-    const targetUrl = form.target_url.value;
+    const targetUrl = e.target.target_url.value;
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    const authHeaders = window.getAuthHeaders ? await window.getAuthHeaders() : {};
     const response = await fetch('/api/workspaces', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', ...authHeaders},
         body: JSON.stringify({target_url: targetUrl})
     });
     if (response.ok) {
         window.location.reload();
+    } else {
+        const data = await response.json().catch(() => ({}));
+        alert(data.detail || 'Failed to create workspace');
+        btn.disabled = false;
     }
 });
 </script>

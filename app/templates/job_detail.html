@@ -820,7 +820,10 @@ if (startJobBtn) {
         }
 
         try {
-            const resp = await fetch('/api/jobs/{{ job.id }}/start', {method: 'POST'});
+            const resp = await fetch('/api/jobs/{{ job.id }}/start', {
+                method: 'POST',
+                headers: window.getAuthHeaders ? await window.getAuthHeaders() : {}
+            });
             if (resp.ok) {
                 // Replace button with live indicator immediately.
                 startJobBtn.outerHTML = '<span id="live-indicator" class="badge badge-neutral"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span></span>Scanning live</span>';
