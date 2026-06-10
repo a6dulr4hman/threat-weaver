@@ -10,19 +10,31 @@
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        /* Clerk component sits inside our card — neutralize its own background */
-        .cl-rootBox, .cl-card { background: transparent !important; box-shadow: none !important; }
-        .cl-formButtonPrimary { background: #fff !important; color: #000 !important; border-radius: 0.5rem !important; }
+        /* Dark-mode Clerk overrides */
+        .cl-rootBox        { background: transparent !important; box-shadow: none !important; }
+        .cl-card           { background: transparent !important; box-shadow: none !important; border: none !important; padding: 0 !important; }
+        .cl-formButtonPrimary { background: #fff !important; color: #000 !important; border-radius: 0.5rem !important; font-weight: 600 !important; }
         .cl-formButtonPrimary:hover { background: #e2e2e2 !important; }
-        .cl-internal-b3fm6y { display: none; } /* "Secured by Clerk" badge */
+        .cl-headerTitle, .cl-headerSubtitle { color: #fff !important; }
+        .cl-formFieldLabel { color: #a1a1a1 !important; }
+        .cl-formFieldInput { background: #050505 !important; border-color: rgba(255,255,255,0.12) !important; color: #fff !important; border-radius: 0.5rem !important; }
+        .cl-formFieldInput:focus { border-color: rgba(255,255,255,0.4) !important; }
+        .cl-dividerLine { background: rgba(255,255,255,0.1) !important; }
+        .cl-dividerText  { color: #707070 !important; }
+        .cl-socialButtonsBlockButton { background: #0a0a0a !important; border-color: rgba(255,255,255,0.12) !important; color: #fff !important; border-radius: 0.5rem !important; }
+        .cl-socialButtonsBlockButton:hover { background: #161616 !important; }
+        .cl-footerActionLink, .cl-footerActionText { color: #a1a1a1 !important; }
+        .cl-footerActionLink:hover { color: #fff !important; }
         .cl-footer { display: none !important; }
+        .cl-internal-b3fm6y { display: none !important; } /* "Secured by Clerk" badge */
     </style>
 </head>
 <body class="tw-body min-h-screen flex items-center justify-center font-sans antialiased">
     <div class="tw-grid-bg" aria-hidden="true"></div>
 
     <div class="relative z-10 w-full max-w-sm px-4">
-        <!-- Logo -->
+
+        <!-- Brand -->
         <div class="flex flex-col items-center mb-8">
             <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black shadow-lg mb-4">
                 <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
@@ -33,10 +45,20 @@
             <p class="text-sm text-ink-300 mt-1">Autonomous DevSecOps Engine</p>
         </div>
 
-        <!-- Clerk component renders here -->
-        <div class="card card-pad" id="clerk-mount"></div>
+        {% if clerk_pk %}
 
-        <p class="text-center text-xs text-ink-400 mt-6">
+        <!-- Loading skeleton shown while Clerk.js initialises -->
+        <div id="clerk-loading" class="card card-pad space-y-4">
+            <div class="h-4 w-2/3 bg-ink-700 rounded animate-pulse"></div>
+            <div class="h-10 w-full bg-ink-800 rounded animate-pulse"></div>
+            <div class="h-10 w-full bg-ink-800 rounded animate-pulse"></div>
+            <div class="h-10 w-full bg-ink-700 rounded animate-pulse"></div>
+        </div>
+
+        <!-- Clerk mounts here; hidden until ready -->
+        <div id="clerk-mount" class="hidden"></div>
+
+        <p id="sign-toggle" class="text-center text-xs text-ink-400 mt-6 hidden">
             {% if mode == "sign_up" %}
             Already have an account?
             <a href="/sign-in" class="text-ink-200 hover:text-white transition-colors">Sign in</a>
@@ -45,41 +67,134 @@
             <a href="/sign-up" class="text-ink-200 hover:text-white transition-colors">Sign up</a>
             {% endif %}
         </p>
-    </div>
 
-    {% if clerk_pk %}
-    <script>
-    // Load Clerk.js and mount the sign-in / sign-up component.
-    // After auth the user is redirected to the dashboard.
-    (async () => {
-        const script = document.createElement('script');
-        script.src = 'https://{{ clerk_pk.split("_")[2] if clerk_pk else "" }}.clerk.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
-        // Standard CDN path for any Clerk publishable key.
-        script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
-        script.onload = async () => {
-            const clerk = new window.Clerk('{{ clerk_pk }}');
-            await clerk.load();
-            if (clerk.user) {
-                window.location.href = '/';
-                return;
+        <p id="clerk-error" class="hidden mt-4 text-center text-sm text-red-400"></p>
+
+        <script>
+        (function () {
+            // Derive the Clerk Frontend API host from the publishable key.
+            // Format: pk_test_<base64-encoded-frontend-api-host>_<suffix>
+            // or pk_live_<base64-encoded-frontend-api-host>_<suffix>
+            const pk = '{{ clerk_pk }}';
+
+            function getFrontendApiUrl(publishableKey) {
+                try {
+                    // The middle segment is a base64url-encoded host + \0 + version
+                    const parts = publishableKey.split('_');
+                    // parts = ["pk", "test"|"live", "<b64>", "<hash>"]
+                    if (parts.length < 3) throw new Error('bad key format');
+                    const decoded = atob(parts[2]);
+                    // decoded is something like "clerk.example.com\0" or "example.accounts.dev\0"
+                    const host = decoded.replace(/\0.*$/, '').replace(/\/$/, '');
+                    return `https://${host}`;
+                } catch (e) {
+                    // Fallback: use the standard Clerk jsDelivr CDN bundle.
+                    // This works for most standard Clerk setups.
+                    return null;
+                }
             }
-            const el = document.getElementById('clerk-mount');
-            {% if mode == "sign_up" %}
-            clerk.mountSignUp(el, { routing: 'hash', afterSignUpUrl: '/', signInUrl: '/sign-in' });
-            {% else %}
-            clerk.mountSignIn(el, { routing: 'hash', afterSignInUrl: '/', signUpUrl: '/sign-up' });
-            {% endif %}
-        };
-        document.head.appendChild(script);
-    })();
-    </script>
-    {% else %}
-    <div class="card card-pad mt-4 text-center text-sm text-ink-300">
-        Auth is not configured. Set <code class="font-mono text-ink-100">CLERK_PUBLISHABLE_KEY</code>
-        and <code class="font-mono text-ink-100">CLERK_SECRET_KEY</code> to enable sign-in.
-        <br><br>
-        <a href="/" class="btn btn-primary btn-sm inline-flex">Continue without auth →</a>
+
+            function loadClerkScript(src, onLoad, onError) {
+                const s = document.createElement('script');
+                s.src = src;
+                s.crossOrigin = 'anonymous';
+                s.onload = onLoad;
+                s.onerror = onError;
+                document.head.appendChild(s);
+            }
+
+            function showError(msg) {
+                document.getElementById('clerk-loading').remove();
+                const el = document.getElementById('clerk-error');
+                el.textContent = msg;
+                el.classList.remove('hidden');
+            }
+
+            async function initClerk() {
+                const frontendApi = getFrontendApiUrl(pk);
+
+                // Primary: load from the app's own Clerk Frontend API (fastest, most reliable).
+                // Fallback: jsDelivr CDN (works but slightly slower + may have version lag).
+                const primarySrc = frontendApi
+                    ? `${frontendApi}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`
+                    : null;
+                const fallbackSrc = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+
+                function mountClerk() {
+                    (async () => {
+                        try {
+                            const clerk = new window.Clerk(pk);
+                            await clerk.load();
+
+                            // Already signed in — go to dashboard.
+                            if (clerk.user) {
+                                window.location.href = '/';
+                                return;
+                            }
+
+                            // Swap loading skeleton for the real component.
+                            document.getElementById('clerk-loading').remove();
+                            const mount = document.getElementById('clerk-mount');
+                            mount.classList.remove('hidden');
+                            document.getElementById('sign-toggle').classList.remove('hidden');
+
+                            const opts = {
+                                routing: 'hash',
+                                {% if mode == "sign_up" %}
+                                afterSignUpUrl: '/',
+                                signInUrl: '/sign-in',
+                                {% else %}
+                                afterSignInUrl: '/',
+                                signUpUrl: '/sign-up',
+                                {% endif %}
+                            };
+
+                            {% if mode == "sign_up" %}
+                            clerk.mountSignUp(mount, opts);
+                            {% else %}
+                            clerk.mountSignIn(mount, opts);
+                            {% endif %}
+                        } catch (err) {
+                            showError('Could not initialise Clerk: ' + err.message);
+                        }
+                    })();
+                }
+
+                if (primarySrc) {
+                    loadClerkScript(
+                        primarySrc,
+                        mountClerk,
+                        () => {
+                            // Primary failed — try jsDelivr fallback.
+                            loadClerkScript(fallbackSrc, mountClerk, () =>
+                                showError('Failed to load Clerk. Check your network and Clerk keys.')
+                            );
+                        }
+                    );
+                } else {
+                    loadClerkScript(fallbackSrc, mountClerk, () =>
+                        showError('Failed to load Clerk. Check your network and Clerk keys.')
+                    );
+                }
+            }
+
+            initClerk();
+        })();
+        </script>
+
+        {% else %}
+        <!-- Auth not configured -->
+        <div class="card card-pad text-center space-y-4">
+            <p class="text-sm text-ink-200">
+                Authentication is not configured.<br>
+                Add <code class="font-mono text-ink-100 bg-white/5 px-1.5 py-0.5 rounded text-xs">CLERK_PUBLISHABLE_KEY</code>
+                and <code class="font-mono text-ink-100 bg-white/5 px-1.5 py-0.5 rounded text-xs">CLERK_SECRET_KEY</code>
+                to your <code class="font-mono text-xs text-ink-100">.env</code>.
+            </p>
+            <a href="/" class="btn btn-primary w-full justify-center">Continue without auth →</a>
+        </div>
+        {% endif %}
+
     </div>
-    {% endif %}
 </body>
 </html>
