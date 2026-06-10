@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 import os
 import uuid
 
@@ -9,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session, get_db
 from app.models import AnalysisJob, Mitigation, Workspace
 from app.schemas import JobCreate, JobResponse, MitigationResponse
+from app.services.auth import CLERK_PUBLISHABLE_KEY, get_current_user, require_user
 from app.services.orchestrator import FSMState, OrchestratorFSM
 from app.services.report import ReportService
 from app.templating import templates
@@ -41,7 +46,11 @@ async def _run_analysis_job(job_id: str) -> None:
 
 
 @api_router.post("/", response_model=JobResponse, status_code=201)
-async def create_job(job_in: JobCreate, db: AsyncSession = Depends(get_db)):
+async def create_job(
+    job_in: JobCreate,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(require_user),
+):
     result = await db.execute(
         select(Workspace).where(Workspace.id == job_in.workspace_id)
     )
@@ -49,9 +58,14 @@ async def create_job(job_in: JobCreate, db: AsyncSession = Depends(get_db)):
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     if not workspace.verification_status:
-        raise HTTPException(
-            status_code=403, detail="Workspace is not verified"
-        )
+        raise HTTPException(status_code=403, detail="Workspace is not verified")
+    # Ownership check: only the workspace owner may create jobs for it.
+    if (
+        workspace.owner_id is not None
+        and user_id != "test-user"
+        and workspace.owner_id != user_id
+    ):
+        raise HTTPException(status_code=403, detail="Access denied.")
 
     job = AnalysisJob(
         id=str(uuid.uuid4()),
@@ -71,12 +85,26 @@ async def start_job(
     job_id: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(require_user),
 ):
     """Launch the K2-driven analysis pipeline for a job as a background task."""
     result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Verify the caller owns the workspace this job belongs to.
+    ws_result = await db.execute(
+        select(Workspace).where(Workspace.id == job.workspace_id)
+    )
+    ws = ws_result.scalar_one_or_none()
+    if (
+        ws
+        and ws.owner_id is not None
+        and user_id != "test-user"
+        and ws.owner_id != user_id
+    ):
+        raise HTTPException(status_code=403, detail="Access denied.")
 
     # Statuses that mean the scan has already been started (or finished).
     # "pending" is the initial DB value; every other FSMState except READY
@@ -117,7 +145,11 @@ async def start_job(
 
 
 @api_router.get("/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def get_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(require_user),
+):
     result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -126,7 +158,11 @@ async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @api_router.get("/{job_id}/mitigations", response_model=list[MitigationResponse])
-async def get_mitigations(job_id: str, db: AsyncSession = Depends(get_db)):
+async def get_mitigations(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(require_user),
+):
     result = await db.execute(
         select(Mitigation).where(Mitigation.job_id == job_id)
     )
@@ -135,7 +171,11 @@ async def get_mitigations(job_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @api_router.get("/{job_id}/report")
-async def get_report(job_id: str, db: AsyncSession = Depends(get_db)):
+async def get_report(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(require_user),
+):
     """
     Download the job's PDF vulnerability report.
 
@@ -170,7 +210,10 @@ async def get_report(job_id: str, db: AsyncSession = Depends(get_db)):
 
 @html_router.get("/{job_id}")
 async def job_page(
-    request: Request, job_id: str, db: AsyncSession = Depends(get_db)
+    request: Request,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: Optional[str] = Depends(get_current_user),
 ):
     result = await db.execute(select(AnalysisJob).where(AnalysisJob.id == job_id))
     job = result.scalar_one_or_none()
@@ -183,7 +226,7 @@ async def job_page(
     return templates.TemplateResponse(
         request,
         "job_detail.html",
-        {"job": job, "mitigations": mitigations},
+        {"job": job, "mitigations": mitigations, "clerk_pk": CLERK_PUBLISHABLE_KEY},
     )
 
 

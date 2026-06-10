@@ -10,6 +10,9 @@ class Workspace(Base):
     target_url = Column(String(255), nullable=False)
     verification_nonce = Column(String(64), nullable=False)
     verification_status = Column(Boolean, default=False)
+    # Clerk user_id of the account that registered this workspace.
+    # NULL for rows created before auth was added (legacy / tests).
+    owner_id = Column(String(64), nullable=True, index=True)
 
 
 class AnalysisJob(Base):
