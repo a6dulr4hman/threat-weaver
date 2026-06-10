@@ -88,12 +88,22 @@
 
     {% if clerk_pk is defined and clerk_pk %}
     <script>
-    // Load Clerk.js and wire up the nav user menu.
-    (async () => {
+    // Load Clerk.js from the app's own Clerk Frontend API domain (fastest),
+    // with jsDelivr CDN as fallback.
+    (function() {
+        const pk = '{{ clerk_pk }}';
+        function getClerkSrc(key) {
+            try {
+                const host = atob(key.split('_')[2]).replace(/\0.*$/, '').replace(/\/$/, '');
+                return `https://${host}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
+            } catch(e) { return 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js'; }
+        }
         const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+        script.src = getClerkSrc(pk);
+        script.crossOrigin = 'anonymous';
+        script.onerror = () => { script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js'; document.head.appendChild(script); };
         script.onload = async () => {
-            const clerk = new window.Clerk('{{ clerk_pk }}');
+            const clerk = new window.Clerk(pk);
             await clerk.load();
 
             const userMenu   = document.getElementById('user-menu');
@@ -104,20 +114,15 @@
 
             if (clerk.user) {
                 const u = clerk.user;
-                // Avatar: image or initials
-                const img = u.imageUrl;
-                if (img) {
-                    userAvatar.innerHTML = `<img src="${img}" class="w-6 h-6 rounded-full object-cover" alt="">`;
+                if (u.imageUrl) {
+                    userAvatar.innerHTML = `<img src="${u.imageUrl}" class="w-6 h-6 rounded-full object-cover" alt="">`;
                 } else {
-                    const name = u.firstName || u.emailAddresses[0]?.emailAddress || '?';
+                    const name = u.firstName || u.emailAddresses?.[0]?.emailAddress || '?';
                     userAvatar.textContent = name[0].toUpperCase();
                 }
-                userEmail.textContent = u.primaryEmailAddress?.emailAddress
-                    || u.firstName
-                    || 'Account';
+                userEmail.textContent = u.primaryEmailAddress?.emailAddress || u.firstName || 'Account';
                 userMenu.classList.remove('hidden');
                 userMenu.classList.add('flex');
-
                 signOutBtn.addEventListener('click', async () => {
                     await clerk.signOut();
                     window.location.href = '/sign-in';
