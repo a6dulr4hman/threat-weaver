@@ -384,8 +384,27 @@
     }
 
     let nodes=[],edges=[];
-    function rebuild(){const vulns=(VULNS&&VULNS.length)?VULNS:correlateClient(raw);const out=buildFromVulns(vulns);nodes=out.nodes;edges=out.edges;}
+    // Animation state: each new node gets an entry {born: timestamp, edgeP: 0..1, nodeP: 0..1}
+    // edgeP drives the edge-draw-in, then nodeP drives the block-appear.
+    const anim = new Map(); // node ref -> {born}
+    const EDGE_DUR = 420, NODE_DUR = 280, NODE_DELAY = 380; // ms
+
+    function rebuild(){
+        const vulns=(VULNS&&VULNS.length)?VULNS:correlateClient(raw);
+        const out=buildFromVulns(vulns);
+        // Tag nodes that didn't exist before so they get animated in.
+        const prevKeys=new Set(nodes.map(n=>n.x+'|'+n.y+'|'+n.type));
+        const now=performance.now();
+        for(const n of out.nodes){
+            const key=n.x+'|'+n.y+'|'+n.type;
+            if(!prevKeys.has(key)) anim.set(n,{born:now});
+        }
+        nodes=out.nodes;edges=out.edges;
+    }
     rebuild();
+
+    // Ease in-out cubic
+    function ease(t){return t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;}
 
     function clip(text,maxW){if(!text)return'';if(ctx.measureText(text).width<=maxW)return text;let t=text;while(t.length&&ctx.measureText(t+'\u2026').width>maxW)t=t.slice(0,-1);return t+'\u2026';}
     function resize(){const r=canvas.parentElement.getBoundingClientRect();canvas.width=r.width*dpr;canvas.height=r.height*dpr;canvas.style.width=r.width+'px';canvas.style.height=r.height+'px';ctx.setTransform(dpr,0,0,dpr,0,0);}
@@ -413,36 +432,91 @@
         const sx=Math.floor(x0/step)*step,sy=Math.floor(y0/step)*step;ctx.fillStyle='rgba(255,255,255,0.05)';const r=Math.max(0.6,0.8/scale);
         for(let gx=sx;gx<x1;gx+=step)for(let gy=sy;gy<y1;gy+=step){ctx.beginPath();ctx.arc(gx,gy,r,0,6.2832);ctx.fill();}}
 
+    function drawEdge(a,b,partial){
+        // partial: 0=nothing, 1=fully drawn. Animates the bezier path-length.
+        const ax=a.x+a.w,ay=a.y+a.h/2,bx=b.x,by=b.y+b.h/2,mx=(ax+bx)/2;
+        if(partial<1){
+            // Approximated by sampling the bezier and drawing a polyline up to `partial`.
+            const steps=24;
+            ctx.beginPath();
+            let first=true;
+            for(let i=0;i<=steps*partial;i++){
+                const t=i/(steps);
+                const px=ax*(1-t)*(1-t)*(1-t)+3*mx*(1-t)*(1-t)*t+3*mx*(1-t)*t*t+bx*t*t*t;
+                const py=ay*(1-t)*(1-t)*(1-t)+3*ay*(1-t)*(1-t)*t+3*by*(1-t)*t*t+by*t*t*t;
+                first?(ctx.moveTo(px,py),first=false):ctx.lineTo(px,py);
+            }
+            ctx.setLineDash([]);ctx.strokeStyle='rgba(255,255,255,0.55)';ctx.lineWidth=1.8;ctx.stroke();
+            return;
+        }
+        // Full static edge (base + animated dash)
+        ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);
+        ctx.setLineDash([]);ctx.strokeStyle='rgba(255,255,255,0.10)';ctx.lineWidth=1.25;ctx.stroke();
+        ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);
+        ctx.setLineDash([2,10]);ctx.lineDashOffset=-flow;ctx.strokeStyle='rgba(255,255,255,0.32)';ctx.lineWidth=1.5;ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-8,by-4);ctx.lineTo(bx-8,by+4);ctx.closePath();
+        ctx.fillStyle='rgba(255,255,255,0.30)';ctx.fill();
+    }
+
+    function drawNode(n,alpha,scaleN){
+        const acc=ACCENT[n.type]||'#3b82f6';const hov=n===hoverNode;
+        const cx=n.x+n.w/2,cy=n.y+n.h/2;
+        ctx.save();ctx.globalAlpha=alpha;
+        ctx.translate(cx,cy);ctx.scale(scaleN,scaleN);ctx.translate(-cx,-cy);
+        ctx.shadowColor=hov?hexA(acc,0.45):'rgba(0,0,0,0.55)';ctx.shadowBlur=hov?28:16;ctx.shadowOffsetY=6;
+        ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);
+        const g=ctx.createLinearGradient(n.x,n.y,n.x,n.y+n.h);g.addColorStop(0,NODE_BG2);g.addColorStop(1,NODE_BG);ctx.fillStyle=g;ctx.fill();
+        ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
+        ctx.strokeStyle=hov?acc:hexA(acc,0.55);ctx.lineWidth=hov?2:1.5;ctx.stroke();
+        ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);ctx.clip();
+        const pad=16,tw=n.w-pad-14;
+        ctx.beginPath();ctx.arc(n.x+pad+3,n.y+pad+6,3.5,0,6.2832);ctx.fillStyle=acc;ctx.fill();
+        ctx.font='600 13px Geist,-apple-system,sans-serif';ctx.fillStyle=TITLE;ctx.textBaseline='middle';
+        ctx.fillText(clip(n.title,tw-16),n.x+pad+14,n.y+pad+6);
+        ctx.textBaseline='top';ctx.font='400 11px "Geist Mono",ui-monospace,monospace';
+        const lh=16;let ly=n.y+pad+24;const maxL=Math.floor((n.h-pad-26)/lh);
+        const lines=(n.lines||[]).filter(l=>l!=='');
+        for(let i=0;i<Math.min(lines.length,maxL);i++){ctx.fillStyle=i===0?BODY:DIM;ctx.fillText(clip(lines[i],tw),n.x+pad,ly);ly+=lh;}
+        ctx.restore();
+    }
+
     function draw(){
         clampView();
         const w=canvas.width/dpr,h=canvas.height/dpr;
+        const now=performance.now();
         ctx.save();ctx.clearRect(0,0,w,h);ctx.translate(offsetX,offsetY);ctx.scale(scale,scale);
         drawGrid(w,h);
-        for(const[a,b]of edges){const ax=a.x+a.w,ay=a.y+a.h/2,bx=b.x,by=b.y+b.h/2,mx=(ax+bx)/2;
-            ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.setLineDash([]);ctx.strokeStyle='rgba(255,255,255,0.10)';ctx.lineWidth=1.25;ctx.stroke();
-            ctx.beginPath();ctx.moveTo(ax,ay);ctx.bezierCurveTo(mx,ay,mx,by,bx,by);ctx.setLineDash([2,10]);ctx.lineDashOffset=-flow;ctx.strokeStyle='rgba(255,255,255,0.32)';ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
-            ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx-8,by-4);ctx.lineTo(bx-8,by+4);ctx.closePath();ctx.fillStyle='rgba(255,255,255,0.30)';ctx.fill();}
-        for(const n of nodes){const acc=ACCENT[n.type]||'#3b82f6';const hov=n===hoverNode;
-            ctx.save();
-            // depth shadow, tinted with the accent on hover
-            ctx.shadowColor=hov?hexA(acc,0.45):'rgba(0,0,0,0.55)';ctx.shadowBlur=hov?28:16;ctx.shadowOffsetY=6;
-            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);
-            const g=ctx.createLinearGradient(n.x,n.y,n.x,n.y+n.h);g.addColorStop(0,NODE_BG2);g.addColorStop(1,NODE_BG);ctx.fillStyle=g;ctx.fill();
-            ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
-            // accent OUTLINE (replaces the old left side bar)
-            ctx.strokeStyle=hov?acc:hexA(acc,0.55);ctx.lineWidth=hov?2:1.5;ctx.stroke();
-            ctx.beginPath();ctx.roundRect(n.x,n.y,n.w,n.h,13);ctx.clip();
-            const pad=16,tw=n.w-pad-14;
-            // accent dot + title
-            ctx.beginPath();ctx.arc(n.x+pad+3,n.y+pad+6,3.5,0,6.2832);ctx.fillStyle=acc;ctx.fill();
-            ctx.font='600 13px Geist,-apple-system,sans-serif';ctx.fillStyle=TITLE;ctx.textBaseline='middle';
-            ctx.fillText(clip(n.title,tw-16),n.x+pad+14,n.y+pad+6);
-            // body lines
-            ctx.textBaseline='top';ctx.font='400 11px "Geist Mono",ui-monospace,monospace';
-            const lh=16;let ly=n.y+pad+24;const maxL=Math.floor((n.h-pad-26)/lh);
-            const lines=(n.lines||[]).filter(l=>l!=='');
-            for(let i=0;i<Math.min(lines.length,maxL);i++){ctx.fillStyle=i===0?BODY:DIM;ctx.fillText(clip(lines[i],tw),n.x+pad,ly);ly+=lh;}
-            ctx.restore();}
+
+        // Build a set of "source nodes" for animated edges (node whose target is new)
+        const newNodeSet=new Set(anim.keys());
+
+        // Edges: animated if their target is new
+        for(const[a,b]of edges){
+            const state=anim.get(b);
+            if(state){
+                const elapsed=now-state.born;
+                const edgeP=Math.min(1,ease(Math.max(0,elapsed)/EDGE_DUR));
+                drawEdge(a,b,edgeP);
+            } else {
+                drawEdge(a,b,1);
+            }
+        }
+
+        // Nodes: animated if new (edge draws first, then node pops in after NODE_DELAY)
+        for(const n of nodes){
+            const state=anim.get(n);
+            if(state){
+                const elapsed=now-state.born;
+                if(elapsed<NODE_DELAY){drawNode(n,0,0.8);continue;}
+                const nodeP=ease(Math.min(1,(elapsed-NODE_DELAY)/NODE_DUR));
+                // Pop: scale from 0.75 to 1.0, alpha from 0 to 1
+                drawNode(n,nodeP,0.75+nodeP*0.25);
+                if(nodeP>=1)anim.delete(n);
+            } else {
+                drawNode(n,1,1);
+            }
+        }
         ctx.restore();
     }
 

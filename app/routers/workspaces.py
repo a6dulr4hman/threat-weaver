@@ -10,7 +10,7 @@ from app.database import get_db
 from app.models import AnalysisJob, Workspace
 from app.schemas import WorkspaceCreate, WorkspaceResponse
 from app.services.crypto import generate_nonce
-from app.services.verification import verify_domain
+from app.services.verification import lookup_txt_values, verify_domain
 from app.templating import templates
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
@@ -53,7 +53,7 @@ async def get_workspace(workspace_id: str, db: AsyncSession = Depends(get_db)):
     return workspace
 
 
-@api_router.post("/{workspace_id}/verify", response_model=WorkspaceResponse)
+@api_router.post("/{workspace_id}/verify")
 async def verify_workspace(workspace_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Workspace).where(Workspace.id == workspace_id))
     workspace = result.scalar_one_or_none()
@@ -64,7 +64,32 @@ async def verify_workspace(workspace_id: str, db: AsyncSession = Depends(get_db)
     workspace.verification_status = verified
     await db.commit()
     await db.refresh(workspace)
-    return workspace
+
+    # When it fails, look up what's actually published so the UI can explain why.
+    detail = None
+    if not verified:
+        found, err = await lookup_txt_values(workspace.target_url)
+        if found:
+            shown = ", ".join(f'"{v}"' for v in found)
+            detail = (
+                f"A TXT record exists at _threatweaver.{workspace.target_url} but "
+                f"none matched. Expected \"{workspace.verification_nonce}\" but "
+                f"found {shown}. Update the record to the expected value."
+            )
+        else:
+            detail = err or (
+                f"No matching TXT record at _threatweaver.{workspace.target_url}, and "
+                f"the HTTP fallback (https://{workspace.target_url}/threatweaver.txt) "
+                f"did not return the nonce."
+            )
+
+    return {
+        "id": workspace.id,
+        "target_url": workspace.target_url,
+        "verification_nonce": workspace.verification_nonce,
+        "verification_status": workspace.verification_status,
+        "verification_detail": detail,
+    }
 
 
 @api_router.post("/{workspace_id}/upload")
