@@ -10,8 +10,17 @@
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        /* Center Clerk's component and theme it dark */
-        .cl-rootBox { width: 100% !important; display: flex !important; justify-content: center !important; }
+        /* ── Clerk dark theme ─────────────────────────────────────────── */
+
+        /* Root wrapper: transparent, full-width, centered */
+        .cl-rootBox, .cl-signIn-root, .cl-signUp-root,
+        .cl-cardBox {
+            background: transparent !important;
+            box-shadow: none !important;
+            width: 100% !important;
+        }
+
+        /* The card itself */
         .cl-card {
             background: #0a0a0a !important;
             border: 1px solid rgba(255,255,255,0.10) !important;
@@ -19,21 +28,67 @@
             border-radius: 0.875rem !important;
             width: 100% !important;
         }
-        /* Remove Clerk's own header (logo + "Sign in to <app>" title + subtitle) */
-        .cl-header, .cl-headerTitle, .cl-headerSubtitle, .cl-logoBox, .cl-logoImage { display: none !important; }
-        .cl-formButtonPrimary { background: #fff !important; color: #000 !important; border-radius: 0.5rem !important; font-weight: 600 !important; text-transform: none !important; }
+
+        /* Hide Clerk's app logo + "Sign in to Falak.me" header entirely */
+        .cl-header,
+        .cl-headerTitle,
+        .cl-headerSubtitle,
+        .cl-logoBox,
+        .cl-logoImage,
+        .cl-applicationName { display: none !important; }
+
+        /* Primary button */
+        .cl-formButtonPrimary {
+            background: #fff !important;
+            color: #000 !important;
+            border-radius: 0.5rem !important;
+            font-weight: 600 !important;
+            text-transform: none !important;
+        }
         .cl-formButtonPrimary:hover { background: #e2e2e2 !important; }
-        .cl-formFieldLabel { color: #a1a1a1 !important; }
-        .cl-formFieldInput { background: #050505 !important; border-color: rgba(255,255,255,0.12) !important; color: #fff !important; border-radius: 0.5rem !important; }
-        .cl-formFieldInput:focus { border-color: rgba(255,255,255,0.4) !important; box-shadow: 0 0 0 3px rgba(255,255,255,0.06) !important; }
-        .cl-dividerLine { background: rgba(255,255,255,0.1) !important; }
+
+        /* Form labels */
+        .cl-formFieldLabel { color: #a1a1a1 !important; font-size: 0.8125rem !important; }
+
+        /* Email / password inputs with subtle ring on focus */
+        .cl-formFieldInput {
+            background: #050505 !important;
+            border: 1px solid rgba(255,255,255,0.12) !important;
+            color: #fff !important;
+            border-radius: 0.5rem !important;
+        }
+        .cl-formFieldInput:focus {
+            border-color: rgba(255,255,255,0.55) !important;
+            box-shadow: 0 0 0 3px rgba(255,255,255,0.08) !important;
+            outline: none !important;
+        }
+
+        /* Divider */
+        .cl-dividerLine { background: rgba(255,255,255,0.10) !important; }
         .cl-dividerText  { color: #707070 !important; }
-        .cl-socialButtonsBlockButton { background: #0e0e0e !important; border-color: rgba(255,255,255,0.12) !important; color: #fff !important; border-radius: 0.5rem !important; }
+
+        /* Social buttons (Google etc.) */
+        .cl-socialButtonsBlockButton {
+            background: #0e0e0e !important;
+            border: 1px solid rgba(255,255,255,0.12) !important;
+            color: #fff !important;
+            border-radius: 0.5rem !important;
+        }
         .cl-socialButtonsBlockButton:hover { background: #161616 !important; }
+        .cl-socialButtonsBlockButtonText { color: #fff !important; }
+
+        /* Footer — Clerk renders "Don't have an account? Sign up" here already */
+        .cl-footer { background: transparent !important; border: none !important; }
         .cl-footerActionLink { color: #ededed !important; }
         .cl-footerActionLink:hover { color: #fff !important; }
         .cl-footerActionText { color: #707070 !important; }
-        .cl-internal-b3fm6y, .cl-internal-1fcj7sw { display: none !important; } /* "Secured by Clerk" badge */
+
+        /* Hide "Secured by Clerk" badge */
+        .cl-internal-b3fm6y,
+        .cl-internal-1fcj7sw,
+        [data-localization-key="footerPageLink__help"],
+        [data-localization-key="footerPageLink__privacy"],
+        [data-localization-key="footerPageLink__terms"] { display: none !important; }
     </style>
 </head>
 <body class="tw-body min-h-screen flex items-center justify-center font-sans antialiased">
@@ -64,16 +119,6 @@
 
         <!-- Clerk mounts its own card here; hidden until ready -->
         <div id="clerk-mount" class="hidden w-full"></div>
-
-        <p id="sign-toggle" class="text-center text-xs text-ink-400 mt-6 hidden">
-            {% if mode == "sign_up" %}
-            Already have an account?
-            <a href="/sign-in" class="text-ink-200 hover:text-white transition-colors">Sign in</a>
-            {% else %}
-            Don't have an account?
-            <a href="/sign-up" class="text-ink-200 hover:text-white transition-colors">Sign up</a>
-            {% endif %}
-        </p>
 
         <p id="clerk-error" class="hidden mt-4 text-center text-sm text-red-400"></p>
 
@@ -115,9 +160,7 @@
                     const loader = document.getElementById('clerk-loading');
                     if (loader) loader.remove();
                     const mount  = document.getElementById('clerk-mount');
-                    const toggle = document.getElementById('sign-toggle');
                     if (mount)  mount.classList.remove('hidden');
-                    if (toggle) toggle.classList.remove('hidden');
 
                     const opts = {
                         routing: 'hash',
