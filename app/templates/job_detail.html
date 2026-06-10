@@ -585,7 +585,15 @@
         const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};
             // Live stepper update
             const phase=job.pipeline_phase||job.status||'';const isComplete=job.status==='complete';
-            if(phase!==lastPhase||isComplete){lastPhase=phase;updateStepper(isComplete?'complete':phase,isComplete);}
+            if(phase!==lastPhase||isComplete){
+                // If we were on pending/ready and the scan just transitioned to a real
+                // phase (recon and beyond), do ONE reload to get a clean server render,
+                // then live updating takes over from there.
+                const wasWaiting=(lastPhase===''||lastPhase==='pending'||lastPhase==='ready');
+                const nowRunning=phase&&phase!=='pending'&&phase!=='ready';
+                if(wasWaiting&&nowRunning&&!isComplete){lastPhase=phase;window.location.reload();return;}
+                lastPhase=phase;updateStepper(isComplete?'complete':phase,isComplete);
+            }
             // Live graph update
             const nr=ag.tool_results||[];const nv=ag.vulnerabilities||[];let changed=false;
             if(nr.length!==raw.length){raw=nr;changed=true;}
@@ -617,8 +625,9 @@
         }catch(e){}},3000);
         }
         window.__startLivePoll=startLivePoll;
-        // Auto-start polling if the job is already running (not pending/ready).
-        if(JOB_STATUS!=='pending'&&JOB_STATUS!=='ready') startLivePoll();
+        // Always start polling — covers running, ready (just started), and pending.
+        // Catches first phase change (pending→ready→recon) without manual reload.
+        startLivePoll();
     }
     })();
     </script>
