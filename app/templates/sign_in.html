@@ -10,53 +10,49 @@
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        /* Dark-mode Clerk overrides */
-        .cl-rootBox        { background: transparent !important; box-shadow: none !important; }
-        .cl-card           { background: transparent !important; box-shadow: none !important; border: none !important; padding: 0 !important; }
-        .cl-formButtonPrimary { background: #fff !important; color: #000 !important; border-radius: 0.5rem !important; font-weight: 600 !important; }
+        /* Center Clerk's component and theme it dark */
+        .cl-rootBox { width: 100% !important; display: flex !important; justify-content: center !important; }
+        .cl-card {
+            background: #0a0a0a !important;
+            border: 1px solid rgba(255,255,255,0.10) !important;
+            box-shadow: 0 8px 40px -12px rgba(0,0,0,0.8) !important;
+            border-radius: 0.875rem !important;
+            width: 100% !important;
+        }
+        /* Remove Clerk's own header (logo + "Sign in to <app>" title + subtitle) */
+        .cl-header, .cl-headerTitle, .cl-headerSubtitle, .cl-logoBox, .cl-logoImage { display: none !important; }
+        .cl-formButtonPrimary { background: #fff !important; color: #000 !important; border-radius: 0.5rem !important; font-weight: 600 !important; text-transform: none !important; }
         .cl-formButtonPrimary:hover { background: #e2e2e2 !important; }
-        .cl-headerTitle, .cl-headerSubtitle { color: #fff !important; }
         .cl-formFieldLabel { color: #a1a1a1 !important; }
         .cl-formFieldInput { background: #050505 !important; border-color: rgba(255,255,255,0.12) !important; color: #fff !important; border-radius: 0.5rem !important; }
-        .cl-formFieldInput:focus { border-color: rgba(255,255,255,0.4) !important; }
+        .cl-formFieldInput:focus { border-color: rgba(255,255,255,0.4) !important; box-shadow: 0 0 0 3px rgba(255,255,255,0.06) !important; }
         .cl-dividerLine { background: rgba(255,255,255,0.1) !important; }
         .cl-dividerText  { color: #707070 !important; }
-        .cl-socialButtonsBlockButton { background: #0a0a0a !important; border-color: rgba(255,255,255,0.12) !important; color: #fff !important; border-radius: 0.5rem !important; }
+        .cl-socialButtonsBlockButton { background: #0e0e0e !important; border-color: rgba(255,255,255,0.12) !important; color: #fff !important; border-radius: 0.5rem !important; }
         .cl-socialButtonsBlockButton:hover { background: #161616 !important; }
-        .cl-footerActionLink, .cl-footerActionText { color: #a1a1a1 !important; }
+        .cl-footerActionLink { color: #ededed !important; }
         .cl-footerActionLink:hover { color: #fff !important; }
-        .cl-footer { display: none !important; }
-        .cl-internal-b3fm6y { display: none !important; } /* "Secured by Clerk" badge */
+        .cl-footerActionText { color: #707070 !important; }
+        .cl-internal-b3fm6y, .cl-internal-1fcj7sw { display: none !important; } /* "Secured by Clerk" badge */
     </style>
 </head>
 <body class="tw-body min-h-screen flex items-center justify-center font-sans antialiased">
     <div class="tw-grid-bg" aria-hidden="true"></div>
 
-    <div class="relative z-10 w-full max-w-sm px-4">
-
-        <!-- Brand -->
-        <div class="flex flex-col items-center mb-8">
-            <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black shadow-lg mb-4">
-                <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2L3 6v6c0 5.25 3.75 9.4 9 10.7 5.25-1.3 9-5.45 9-10.7V6l-9-4z"/>
-                </svg>
-            </span>
-            <h1 class="text-xl font-semibold tracking-tight text-white">ThreatWeaver</h1>
-            <p class="text-sm text-ink-300 mt-1">Autonomous DevSecOps Engine</p>
-        </div>
+    <div class="relative z-10 w-full max-w-[400px] px-4 flex flex-col items-center">
 
         {% if clerk_pk %}
 
         <!-- Loading skeleton shown while Clerk.js initialises -->
-        <div id="clerk-loading" class="card card-pad space-y-4">
-            <div class="h-4 w-2/3 bg-ink-700 rounded animate-pulse"></div>
+        <div id="clerk-loading" class="card card-pad space-y-4 w-full">
+            <div class="h-4 w-2/3 bg-ink-700 rounded animate-pulse mx-auto"></div>
             <div class="h-10 w-full bg-ink-800 rounded animate-pulse"></div>
             <div class="h-10 w-full bg-ink-800 rounded animate-pulse"></div>
             <div class="h-10 w-full bg-ink-700 rounded animate-pulse"></div>
         </div>
 
-        <!-- Clerk mounts here; hidden until ready -->
-        <div id="clerk-mount" class="hidden"></div>
+        <!-- Clerk mounts its own card here; hidden until ready -->
+        <div id="clerk-mount" class="hidden w-full"></div>
 
         <p id="sign-toggle" class="text-center text-xs text-ink-400 mt-6 hidden">
             {% if mode == "sign_up" %}
