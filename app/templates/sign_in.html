@@ -74,71 +74,14 @@
         (function () {
             const pk = '{{ clerk_pk }}';
 
+            const CDN_PRIMARY  = 'https://clerk.clerk.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
+            const CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
+
             function showError(msg) {
                 const loader = document.getElementById('clerk-loading');
                 if (loader) loader.remove();
                 const el = document.getElementById('clerk-error');
                 if (el) { el.textContent = msg; el.classList.remove('hidden'); }
-            }
-
-            async function mountClerk() {
-                // Guard: Clerk JS must have defined window.Clerk
-                if (typeof window.Clerk === 'undefined') {
-                    showError('Clerk library failed to load. Check your network connection.');
-                    return;
-                }
-                try {
-                    const clerk = new window.Clerk(pk);
-                    await clerk.load();
-
-                    if (clerk.user) {
-                        window.location.href = '/';
-                        return;
-                    }
-
-                    const loader = document.getElementById('clerk-loading');
-                    if (loader) loader.remove();
-                    const mount = document.getElementById('clerk-mount');
-                    if (mount) mount.classList.remove('hidden');
-                    const toggle = document.getElementById('sign-toggle');
-                    if (toggle) toggle.classList.remove('hidden');
-
-                    const opts = {
-                        routing: 'hash',
-                        {% if mode == "sign_up" %}
-                        afterSignUpUrl: '/',
-                        signInUrl: '/sign-in',
-                        {% else %}
-                        afterSignInUrl: '/',
-                        signUpUrl: '/sign-up',
-                        {% endif %}
-                    };
-
-                    {% if mode == "sign_up" %}
-                    clerk.mountSignUp(mount, opts);
-                    {% else %}
-                    clerk.mountSignIn(mount, opts);
-                    {% endif %}
-                } catch (err) {
-                    showError('Could not initialise Clerk: ' + err.message);
-                }
-            }
-
-            // Use the Clerk-provided publishable key URL pattern.
-            // Build the frontend API host from the key itself:
-            // pk_[test|live]_<base64(host + "$")>
-            function clerkScriptUrl() {
-                try {
-                    // Clerk encodes the Frontend API host as base64(host + "$") in the key
-                    const b64 = pk.split('_')[2];
-                    if (!b64) throw new Error('bad key');
-                    const raw = atob(b64);          // e.g. "foo-bar.clerk.accounts.dev$"
-                    const host = raw.split('$')[0].split('\0')[0].trim();
-                    if (host && host.includes('.')) {
-                        return `https://${host}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
-                    }
-                } catch (_) {}
-                return null;
             }
 
             function loadScript(src, onSuccess, onFail) {
@@ -149,20 +92,48 @@
                 document.head.appendChild(s);
             }
 
-            const primary = clerkScriptUrl();
-            const fallback = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+            async function mountClerk() {
+                if (typeof window.Clerk === 'undefined') {
+                    showError('Clerk library failed to load. Open browser DevTools → Network and check if clerk.clerk.com is reachable.');
+                    return;
+                }
+                try {
+                    const clerk = new window.Clerk(pk);
+                    await clerk.load();
 
-            if (primary) {
-                loadScript(primary, mountClerk, () =>
-                    loadScript(fallback, mountClerk, () =>
-                        showError('Failed to load Clerk.js. Check your network.')
-                    )
-                );
-            } else {
-                loadScript(fallback, mountClerk, () =>
-                    showError('Failed to load Clerk.js. Check your network.')
-                );
+                    if (clerk.user) { window.location.href = '/'; return; }
+
+                    const loader = document.getElementById('clerk-loading');
+                    if (loader) loader.remove();
+                    const mount  = document.getElementById('clerk-mount');
+                    const toggle = document.getElementById('sign-toggle');
+                    if (mount)  mount.classList.remove('hidden');
+                    if (toggle) toggle.classList.remove('hidden');
+
+                    const opts = {
+                        routing: 'hash',
+                        {% if mode == "sign_up" %}
+                        afterSignUpUrl: '/', signInUrl: '/sign-in',
+                        {% else %}
+                        afterSignInUrl: '/', signUpUrl: '/sign-up',
+                        {% endif %}
+                    };
+
+                    {% if mode == "sign_up" %}
+                    clerk.mountSignUp(mount, opts);
+                    {% else %}
+                    clerk.mountSignIn(mount, opts);
+                    {% endif %}
+                } catch (err) {
+                    showError('Clerk error: ' + err.message);
+                }
             }
+
+            loadScript(CDN_PRIMARY, mountClerk,
+                () => loadScript(CDN_FALLBACK, mountClerk,
+                    () => showError('Failed to load Clerk.js from CDN. Check network / CSP.')
+                )
+            );
         })();
         </script>
 

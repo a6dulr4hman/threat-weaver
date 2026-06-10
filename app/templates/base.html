@@ -91,64 +91,52 @@
     (function() {
         const pk = '{{ clerk_pk }}';
 
-        function clerkScriptUrl(key) {
-            try {
-                const raw = atob(key.split('_')[2]);
-                const host = raw.split('$')[0].split('\0')[0].trim();
-                if (host && host.includes('.')) {
-                    return `https://${host}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
-                }
-            } catch(_) {}
-            return null;
-        }
+        const CDN_PRIMARY  = 'https://clerk.clerk.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
+        const CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
 
-        function loadScript(src, cb) {
+        function loadScript(src, onSuccess, onFail) {
             const s = document.createElement('script');
             s.src = src;
-            s.onload = cb;
-            s.onerror = () => {
-                // Primary failed — try jsDelivr
-                if (src !== 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js') {
-                    loadScript('https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js', cb);
-                }
-            };
+            s.onload = onSuccess;
+            s.onerror = onFail;
             document.head.appendChild(s);
         }
 
         async function initNav() {
             if (typeof window.Clerk === 'undefined') return;
-            const clerk = new window.Clerk(pk);
-            await clerk.load();
+            try {
+                const clerk = new window.Clerk(pk);
+                await clerk.load();
 
-            const userMenu   = document.getElementById('user-menu');
-            const userAvatar = document.getElementById('user-avatar');
-            const userEmail  = document.getElementById('user-email');
-            const signOutBtn = document.getElementById('sign-out-btn');
-            const signInLink = document.getElementById('sign-in-link');
+                const userMenu   = document.getElementById('user-menu');
+                const userAvatar = document.getElementById('user-avatar');
+                const userEmail  = document.getElementById('user-email');
+                const signOutBtn = document.getElementById('sign-out-btn');
+                const signInLink = document.getElementById('sign-in-link');
 
-            if (clerk.user) {
-                const u = clerk.user;
-                if (u.imageUrl) {
-                    userAvatar.innerHTML = `<img src="${u.imageUrl}" class="w-6 h-6 rounded-full object-cover" alt="">`;
+                if (clerk.user) {
+                    const u = clerk.user;
+                    if (u.imageUrl) {
+                        userAvatar.innerHTML = `<img src="${u.imageUrl}" class="w-6 h-6 rounded-full object-cover" alt="">`;
+                    } else {
+                        userAvatar.textContent = (u.firstName || u.emailAddresses?.[0]?.emailAddress || '?')[0].toUpperCase();
+                    }
+                    userEmail.textContent = u.primaryEmailAddress?.emailAddress || u.firstName || 'Account';
+                    userMenu.classList.remove('hidden');
+                    userMenu.classList.add('flex');
+                    signOutBtn.addEventListener('click', async () => {
+                        await clerk.signOut();
+                        window.location.href = '/sign-in';
+                    });
                 } else {
-                    const name = (u.firstName || u.emailAddresses?.[0]?.emailAddress || '?')[0].toUpperCase();
-                    userAvatar.textContent = name;
+                    signInLink.classList.remove('hidden');
                 }
-                userEmail.textContent = u.primaryEmailAddress?.emailAddress || u.firstName || 'Account';
-                userMenu.classList.remove('hidden');
-                userMenu.classList.add('flex');
-                signOutBtn.addEventListener('click', async () => {
-                    await clerk.signOut();
-                    window.location.href = '/sign-in';
-                });
-            } else {
-                signInLink.classList.remove('hidden');
-            }
+            } catch(_) {}
         }
 
-        const primary = clerkScriptUrl(pk);
-        const src = primary || 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
-        loadScript(src, initNav);
+        loadScript(CDN_PRIMARY, initNav,
+            () => loadScript(CDN_FALLBACK, initNav, () => {})
+        );
     })();
     </script>
     {% endif %}
