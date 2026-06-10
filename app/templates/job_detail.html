@@ -601,13 +601,18 @@
             const st=document.getElementById('graphSteps');if(st)st.textContent=nr.length+' steps';
             // Live mitigations
             await fetchMitigations();
-            // On complete: one final reload to pick up the report link + final assessment
-            // Only treat as TRULY complete when the report is generated (not just
-            // when status flips — the orchestrator can set status=complete after
-            // the first patch while more work is still pending).
-            const isFinalized=isComplete&&ag.report&&ag.report.status;
+            // Reload ONLY once all three finalization signals are present:
+            //   1. job.status === 'complete'
+            //   2. attack_graph_data.report exists (PDF generated)
+            //   3. attack_graph_data.completed_at is stamped
+            // completed_at is written last in _finalize_and_report, so its
+            // presence guarantees the timer has the correct final value and
+            // the assessment/report are fully committed before the reload.
+            const isFinalized=isComplete&&ag.report&&ag.report.status&&ag.completed_at;
             if(isFinalized){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');
                 const li=document.getElementById('live-indicator');if(li)li.outerHTML='<span class="badge badge-green"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Complete</span>';
+                // Freeze the timer immediately using the committed completed_at value.
+                if(window.__updateScanTimer)window.__updateScanTimer(ag.started_at,ag.completed_at);
                 setTimeout(()=>window.location.reload(),2000);}
         }catch(e){}},3000);
         }
