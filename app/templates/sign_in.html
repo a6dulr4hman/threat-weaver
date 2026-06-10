@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThreatWeaver &mdash; {{ "Sign up" if mode == "sign_up" else "Sign in" }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* Clerk component sits inside our card — neutralize its own background */
+        .cl-rootBox, .cl-card { background: transparent !important; box-shadow: none !important; }
+        .cl-formButtonPrimary { background: #fff !important; color: #000 !important; border-radius: 0.5rem !important; }
+        .cl-formButtonPrimary:hover { background: #e2e2e2 !important; }
+        .cl-internal-b3fm6y { display: none; } /* "Secured by Clerk" badge */
+        .cl-footer { display: none !important; }
+    </style>
+</head>
+<body class="tw-body min-h-screen flex items-center justify-center font-sans antialiased">
+    <div class="tw-grid-bg" aria-hidden="true"></div>
+
+    <div class="relative z-10 w-full max-w-sm px-4">
+        <!-- Logo -->
+        <div class="flex flex-col items-center mb-8">
+            <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black shadow-lg mb-4">
+                <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L3 6v6c0 5.25 3.75 9.4 9 10.7 5.25-1.3 9-5.45 9-10.7V6l-9-4z"/>
+                </svg>
+            </span>
+            <h1 class="text-xl font-semibold tracking-tight text-white">ThreatWeaver</h1>
+            <p class="text-sm text-ink-300 mt-1">Autonomous DevSecOps Engine</p>
+        </div>
+
+        <!-- Clerk component renders here -->
+        <div class="card card-pad" id="clerk-mount"></div>
+
+        <p class="text-center text-xs text-ink-400 mt-6">
+            {% if mode == "sign_up" %}
+            Already have an account?
+            <a href="/sign-in" class="text-ink-200 hover:text-white transition-colors">Sign in</a>
+            {% else %}
+            Don't have an account?
+            <a href="/sign-up" class="text-ink-200 hover:text-white transition-colors">Sign up</a>
+            {% endif %}
+        </p>
+    </div>
+
+    {% if clerk_pk %}
+    <script>
+    // Load Clerk.js and mount the sign-in / sign-up component.
+    // After auth the user is redirected to the dashboard.
+    (async () => {
+        const script = document.createElement('script');
+        script.src = 'https://{{ clerk_pk.split("_")[2] if clerk_pk else "" }}.clerk.accounts.dev/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+        // Standard CDN path for any Clerk publishable key.
+        script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+        script.onload = async () => {
+            const clerk = new window.Clerk('{{ clerk_pk }}');
+            await clerk.load();
+            if (clerk.user) {
+                window.location.href = '/';
+                return;
+            }
+            const el = document.getElementById('clerk-mount');
+            {% if mode == "sign_up" %}
+            clerk.mountSignUp(el, { routing: 'hash', afterSignUpUrl: '/', signInUrl: '/sign-in' });
+            {% else %}
+            clerk.mountSignIn(el, { routing: 'hash', afterSignInUrl: '/', signUpUrl: '/sign-up' });
+            {% endif %}
+        };
+        document.head.appendChild(script);
+    })();
+    </script>
+    {% else %}
+    <div class="card card-pad mt-4 text-center text-sm text-ink-300">
+        Auth is not configured. Set <code class="font-mono text-ink-100">CLERK_PUBLISHABLE_KEY</code>
+        and <code class="font-mono text-ink-100">CLERK_SECRET_KEY</code> to enable sign-in.
+        <br><br>
+        <a href="/" class="btn btn-primary btn-sm inline-flex">Continue without auth →</a>
+    </div>
+    {% endif %}
+</body>
+</html>
