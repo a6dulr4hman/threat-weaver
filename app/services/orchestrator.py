@@ -566,7 +566,15 @@ class OrchestratorFSM:
         }
 
     def _advance_to_complete(self) -> None:
-        """Advance FSM to COMPLETE through valid transitions."""
+        """Advance FSM state to COMPLETE through valid transitions.
+
+        Deliberately does NOT set pipeline_phase here — that is only set in
+        _finalize_and_report() once the report is actually generated.  This
+        prevents the UI stepper from jumping to "Complete" while the scan is
+        still running (the bug where pipeline_phase=complete was stored before
+        _finalize_and_report had finished, leaving the header saying "Scanning
+        live" while the stepper showed "Complete").
+        """
         state_chain = [
             FSMState.RECON, FSMState.DAST_TESTING,
             FSMState.POC_VERIFICATION, FSMState.BLUE_TEAM_REMEDIATION,
@@ -577,7 +585,7 @@ class OrchestratorFSM:
                 continue
             if not self.transition(next_state):
                 break
-        self.pipeline_phase = FSMState.COMPLETE
+        # pipeline_phase is intentionally NOT set to COMPLETE here.
 
     def _accumulate_usage(self, usage: dict | None) -> None:
         """Fold one K2-Think-v2 API call's token usage into the running total.
@@ -773,6 +781,9 @@ class OrchestratorFSM:
             _log.exception("PDF generation failed for job %s", self.job_id)
 
         self.attack_graph["report"] = status
+        # Only now is the job truly finished — stamp pipeline_phase so the
+        # UI stepper advances to "Complete" only once the report exists.
+        self.pipeline_phase = FSMState.COMPLETE
 
     def _maybe_advance_state(self, tool_name: str) -> None:
         """Advance FSM state by one step based on tool used."""

@@ -1206,9 +1206,12 @@ async def test_pipeline_phase_persisted(db_session):
 
 
 def test_advance_to_complete_sets_pipeline_phase():
-    """_advance_to_complete sets pipeline_phase to COMPLETE."""
+    """_advance_to_complete advances the FSM state to COMPLETE but intentionally
+    does NOT set pipeline_phase yet -- that only happens in _finalize_and_report
+    so the UI stepper stays on 'Remediation' until the report is actually done."""
     fsm = OrchestratorFSM(db=MagicMock(), job_id="complete-test")
     assert fsm.pipeline_phase == FSMState.READY
     fsm._advance_to_complete()
     assert fsm.state == FSMState.COMPLETE
-    assert fsm.pipeline_phase == FSMState.COMPLETE
+    # pipeline_phase should NOT be COMPLETE yet; it is stamped in _finalize_and_report.
+    assert fsm.pipeline_phase != FSMState.COMPLETE
