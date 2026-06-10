@@ -88,6 +88,11 @@
 
     {% if clerk_pk is defined and clerk_pk %}
     <script>
+    // Global helper — returns Authorization header with the current Clerk session token.
+    // All API fetch calls use this so the backend can verify the user.
+    // Fallback until Clerk loads
+    window.getAuthHeaders = async function() { return {}; };
+
     (function() {
         const pk = '{{ clerk_pk }}';
         const CDN_PRIMARY  = 'https://clerk.clerk.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
@@ -110,6 +115,14 @@
             if (typeof clerk === 'function') { clerk = new window.Clerk(pk); }
             try {
                 await clerk.load();
+
+                // Expose a global helper so all API fetch calls can attach the token.
+                window.getAuthHeaders = async function() {
+                    try {
+                        const token = await clerk.session?.getToken();
+                        return token ? {'Authorization': 'Bearer ' + token} : {};
+                    } catch(_) { return {}; }
+                };
                 const userMenu   = document.getElementById('user-menu');
                 const userAvatar = document.getElementById('user-avatar');
                 const userEmail  = document.getElementById('user-email');
@@ -141,6 +154,8 @@
         );
     })();
     </script>
+    {% else %}
+    <script>window.getAuthHeaders = async function(){ return {}; };</script>
     {% endif %}
 </body>
 </html>

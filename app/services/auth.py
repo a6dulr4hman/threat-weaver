@@ -60,13 +60,25 @@ async def _get_jwks() -> dict:
     if _jwks_cache and now - _jwks_cache[0] < _JWKS_TTL:
         return _jwks_cache[1]
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(
-            "https://api.clerk.com/v1/jwks",
-            headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.clerk.com/v1/jwks",
+                headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to fetch Clerk JWKS (HTTP {exc.response.status_code}). "
+                   "Check CLERK_SECRET_KEY.",
         )
-        resp.raise_for_status()
-        data = resp.json()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Failed to reach Clerk JWKS endpoint: {exc}",
+        )
 
     # Build kid → public key map using PyJWT's algorithms helper.
     from jwt.algorithms import RSAAlgorithm
@@ -75,7 +87,10 @@ async def _get_jwks() -> dict:
     for jwk in data.get("keys", []):
         kid = jwk.get("kid")
         if kid:
-            key_map[kid] = RSAAlgorithm.from_jwk(jwk)
+            try:
+                key_map[kid] = RSAAlgorithm.from_jwk(jwk)
+            except Exception:
+                pass  # Skip malformed keys
 
     _jwks_cache = (now, key_map)
     return key_map
@@ -142,13 +157,25 @@ async def _verify_token(token: str) -> str:
 
 def _extract_token(
     session_cookie: Optional[str],
+    client_uat_cookie: Optional[str],
     auth_header: Optional[str],
 ) -> str | None:
-    """Pull the raw JWT from the __session cookie or Authorization header."""
-    if session_cookie:
-        return session_cookie
+    """Pull the raw JWT from any Clerk cookie or Authorization header.
+
+    ClerkJS v5 sets several cookies depending on environment:
+    - __session          — standard session JWT (same-domain)
+    - __clerk_db_jwt     — development-mode session JWT (localhost)
+    - Authorization: Bearer <token> — set explicitly by the JS on API calls
+    """
+    # Prefer explicit Authorization header (set by our JS fetch calls)
     if auth_header and auth_header.startswith("Bearer "):
         return auth_header[7:]
+    # Session cookie (standard / production)
+    if session_cookie:
+        return session_cookie
+    # ClerkJS v5 dev-mode cookie
+    if client_uat_cookie:
+        return client_uat_cookie
     return None
 
 
@@ -158,18 +185,13 @@ def _extract_token(
 
 async def get_current_user(
     __session: Optional[str] = Cookie(default=None),
+    __clerk_db_jwt: Optional[str] = Cookie(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> str | None:
-    """
-    Optional auth dependency — returns the Clerk user_id or ``None``.
-
-    Use this on routes that work both authenticated and unauthenticated
-    (e.g. the dashboard, which shows an empty state to guests).
-    """
     if not _AUTH_ENABLED:
-        return None  # tests / local dev without Clerk keys
+        return None
 
-    token = _extract_token(__session, authorization)
+    token = _extract_token(__session, __clerk_db_jwt, authorization)
     if not token:
         return None
 
@@ -181,21 +203,16 @@ async def get_current_user(
 
 async def require_user(
     __session: Optional[str] = Cookie(default=None),
+    __clerk_db_jwt: Optional[str] = Cookie(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> str:
-    """
-    Required auth dependency — raises 401 if no valid session.
-
-    Use this on routes that must be authenticated (API endpoints that
-    create or read user-owned resources).
-    """
     if not _AUTH_ENABLED:
-        return "test-user"  # tests / local dev
+        return "test-user"
 
-    token = _extract_token(__session, authorization)
+    token = _extract_token(__session, __clerk_db_jwt, authorization)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not signed in. Authenticate via Clerk and retry.",
+            detail="Not signed in. Please sign in to continue.",
         )
     return await _verify_token(token)

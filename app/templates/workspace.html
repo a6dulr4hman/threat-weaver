@@ -129,6 +129,10 @@
 </section>
 
 <script>
+async function authHeaders() {
+    return window.getAuthHeaders ? await window.getAuthHeaders() : {};
+}
+
 const verifyBtn = document.getElementById('verify-btn');
 verifyBtn.addEventListener('click', async () => {
     const msg = document.getElementById('verify-message');
@@ -137,7 +141,10 @@ verifyBtn.addEventListener('click', async () => {
     verifyBtn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Checking\u2026';
     msg.classList.add('hidden');
     try {
-        const response = await fetch('/api/workspaces/{{ workspace.id }}/verify', {method: 'POST'});
+        const response = await fetch('/api/workspaces/{{ workspace.id }}/verify', {
+            method: 'POST',
+            headers: await authHeaders()
+        });
         const data = await response.json();
         if (data.verification_status) {
             verifyBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Verified \u2014 reloading\u2026';
@@ -165,10 +172,11 @@ if (startScanBtn) {
         startScanBtn.disabled = true;
         startScanBtn.textContent = 'Starting...';
         try {
+            const ah = await authHeaders();
             // 1. Create the analysis job for this workspace.
             const createResp = await fetch('/api/jobs/', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: {'Content-Type': 'application/json', ...ah},
                 body: JSON.stringify({workspace_id: '{{ workspace.id }}'})
             });
             if (!createResp.ok) {
@@ -181,7 +189,10 @@ if (startScanBtn) {
             const job = await createResp.json();
 
             // 2. Launch the K2-driven pipeline.
-            const startResp = await fetch('/api/jobs/' + job.id + '/start', {method: 'POST'});
+            const startResp = await fetch('/api/jobs/' + job.id + '/start', {
+                method: 'POST',
+                headers: ah
+            });
             if (!startResp.ok) {
                 const data = await startResp.json();
                 alert('Could not start scan: ' + (data.detail || 'Unknown error'));
