@@ -90,12 +90,14 @@
     <script>
     (function() {
         const pk = '{{ clerk_pk }}';
-
         const CDN_PRIMARY  = 'https://clerk.clerk.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
         const CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
 
         function loadScript(src, onSuccess, onFail) {
             const s = document.createElement('script');
+            s.setAttribute('data-clerk-publishable-key', pk);
+            s.async = true;
+            s.crossOrigin = 'anonymous';
             s.src = src;
             s.onload = onSuccess;
             s.onerror = onFail;
@@ -103,11 +105,11 @@
         }
 
         async function initNav() {
-            if (typeof window.Clerk === 'undefined') return;
+            let clerk = window.Clerk;
+            if (!clerk) return;
+            if (typeof clerk === 'function') { clerk = new window.Clerk(pk); }
             try {
-                const clerk = new window.Clerk(pk);
                 await clerk.load();
-
                 const userMenu   = document.getElementById('user-menu');
                 const userAvatar = document.getElementById('user-avatar');
                 const userEmail  = document.getElementById('user-email');
