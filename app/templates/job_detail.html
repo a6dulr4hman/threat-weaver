@@ -790,6 +790,30 @@ if (startJobBtn) {
     startJobBtn.addEventListener('click', async () => {
         startJobBtn.disabled = true;
         startJobBtn.innerHTML = '<span class="relative flex h-2 w-2 mr-1.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span></span>Starting\u2026';
+
+        function showError(msg, alreadyRunning) {
+            // Show an inline error banner below the header instead of an alert().
+            let banner = document.getElementById('startErrorBanner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'startErrorBanner';
+                banner.className = 'card card-pad mb-6';
+                startJobBtn.closest('section, div')?.after?.(banner) ||
+                    startJobBtn.parentElement.insertAdjacentElement('afterend', banner);
+            }
+            banner.innerHTML =
+                '<div class="flex items-start gap-3">' +
+                '<svg class="w-5 h-5 flex-shrink-0 mt-0.5" style="color:#f87171" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>' +
+                '<div class="flex-1"><div class="font-medium text-white mb-1">' +
+                (alreadyRunning ? 'Scan already started' : 'Could not start scan') +
+                '</div><div class="text-sm text-ink-200">' + msg.replace(/</g,'&lt;') + '</div></div>' +
+                (alreadyRunning
+                    ? '<a href="/jobs/{{ job.id }}" class="btn btn-secondary btn-sm flex-shrink-0">View scan</a>'
+                    : '') +
+                '</div>';
+            banner.style.borderColor = 'rgba(248,113,113,0.35)';
+        }
+
         try {
             const resp = await fetch('/api/jobs/{{ job.id }}/start', {method: 'POST'});
             if (resp.ok) {
@@ -798,13 +822,18 @@ if (startJobBtn) {
                 // Kick off poll loop (the graph IIFE skipped it because JOB_STATUS was pending/ready).
                 if (window.__startLivePoll) window.__startLivePoll();
             } else {
-                const data = await resp.json();
-                alert('Could not start scan: ' + (data.detail || 'Unknown error'));
+                const data = await resp.json().catch(() => ({}));
+                const msg = data.detail || 'Unknown error';
+                const alreadyRunning = resp.status === 409;
+                showError(msg, alreadyRunning);
                 startJobBtn.disabled = false;
-                startJobBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Start scan';
+                startJobBtn.innerHTML =
+                    '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+                    '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>' +
+                    '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Start scan';
             }
         } catch (err) {
-            alert('Error: ' + err.message);
+            showError(err.message, false);
             startJobBtn.disabled = false;
             startJobBtn.textContent = 'Start scan';
         }

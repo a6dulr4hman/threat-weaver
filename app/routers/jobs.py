@@ -78,12 +78,33 @@ async def start_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Guard against re-running an in-progress or finished job.
-    running_states = {s.value for s in FSMState} - {FSMState.COMPLETE.value}
-    if job.status in running_states and job.status != FSMState.READY.value:
-        raise HTTPException(status_code=409, detail="Job is already running")
-    if job.status == FSMState.COMPLETE.value:
-        raise HTTPException(status_code=409, detail="Job already completed")
+    # Statuses that mean the scan has already been started (or finished).
+    # "pending" is the initial DB value; every other FSMState except READY
+    # means the orchestrator is already (or was) running.
+    CANNOT_START = {
+        # FSM in-progress states
+        FSMState.RECON.value,
+        FSMState.DAST_TESTING.value,
+        FSMState.POC_VERIFICATION.value,
+        FSMState.BLUE_TEAM_REMEDIATION.value,
+        FSMState.COMPLETE.value,
+        # READY means /start was already called (orchestrator is spinning up)
+        FSMState.READY.value,
+    }
+
+    if job.status in CANNOT_START:
+        if job.status == FSMState.COMPLETE.value:
+            raise HTTPException(
+                status_code=409,
+                detail="This scan has already completed. Create a new job to scan again.",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Scan is already in progress (status: {job.status}). "
+                "Wait for it to finish or create a new job."
+            ),
+        )
 
     # Mark as started so the UI reflects progress immediately; the orchestrator
     # treats a non-FSM status ("pending") as READY on hydration.
