@@ -73,7 +73,6 @@
         <script>
         (function () {
             const pk = '{{ clerk_pk }}';
-
             const CDN_PRIMARY  = 'https://clerk.clerk.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
             const CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
 
@@ -86,6 +85,9 @@
 
             function loadScript(src, onSuccess, onFail) {
                 const s = document.createElement('script');
+                s.setAttribute('data-clerk-publishable-key', pk);
+                s.async = true;
+                s.crossOrigin = 'anonymous';
                 s.src = src;
                 s.onload = onSuccess;
                 s.onerror = onFail;
@@ -93,14 +95,14 @@
             }
 
             async function mountClerk() {
-                if (typeof window.Clerk === 'undefined') {
-                    showError('Clerk library failed to load. Open browser DevTools → Network and check if clerk.clerk.com is reachable.');
+                let clerk = window.Clerk;
+                if (!clerk) {
+                    showError('Clerk library loaded but window.Clerk is undefined. Check console for CSP/JS errors.');
                     return;
                 }
+                if (typeof clerk === 'function') { clerk = new window.Clerk(pk); }
                 try {
-                    const clerk = new window.Clerk(pk);
                     await clerk.load();
-
                     if (clerk.user) { window.location.href = '/'; return; }
 
                     const loader = document.getElementById('clerk-loading');
