@@ -44,40 +44,6 @@
     </div>
 </div>
 
-<!-- FSM State Progress Stepper (compact) -->
-<section class="card px-5 py-4 mb-6">
-    {% set states = ["ready", "recon", "dast_testing", "poc_verification", "blue_team_remediation", "complete"] %}
-    {% set state_labels = {"ready": "Ready", "recon": "Recon", "dast_testing": "DAST", "poc_verification": "PoC Verify", "blue_team_remediation": "Remediation", "complete": "Complete"} %}
-    {% set display_phase = 'complete' if job.status == 'complete' else (job.pipeline_phase if job.pipeline_phase else job.status) %}
-    {% set current_index = (states | length) if job.status == 'complete' else (states.index(display_phase) if display_phase in states else 0) %}
-
-    <div class="flex items-center w-full overflow-x-auto" id="pipelineStepper" data-phase="{{ display_phase }}">
-        {% for state in states %}
-        <div class="flex items-center {% if not loop.last %}flex-1{% endif %}" data-step="{{ loop.index0 }}">
-            <div class="flex flex-col items-center min-w-[48px]">
-                {% if loop.index0 < current_index %}
-                <div class="w-6 h-6 rounded-full bg-white flex items-center justify-center" data-circle>
-                    <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
-                </div>
-                {% elif loop.index0 == current_index %}
-                <div class="w-6 h-6 rounded-full bg-white flex items-center justify-center pulse-ring" data-circle>
-                    <div class="w-2 h-2 rounded-full bg-black"></div>
-                </div>
-                {% else %}
-                <div class="w-6 h-6 rounded-full border border-ink-700 flex items-center justify-center" data-circle>
-                    <div class="w-1 h-1 rounded-full bg-ink-600"></div>
-                </div>
-                {% endif %}
-                <span class="text-[10px] mt-1 text-center leading-tight {% if loop.index0 == current_index %}text-white font-medium{% elif loop.index0 < current_index %}text-ink-100{% else %}text-ink-400{% endif %}" data-label>{{ state_labels[state] }}</span>
-            </div>
-            {% if not loop.last %}
-            <div class="flex-1 mx-1.5 h-px {% if loop.index0 < current_index %}bg-white{% else %}bg-ink-800{% endif %} hidden sm:block" data-line></div>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
-</section>
-
 <!-- Severity & PDF Report -->
 {% set report = job.attack_graph_data.report if job.attack_graph_data else None %}
 {% set severity = job.overall_severity or (job.attack_graph_data.overall_severity if job.attack_graph_data else None) %}
@@ -540,27 +506,10 @@
 
     if(JOB_STATUS!=='complete'){
         function startLivePoll(){
-        let lastPhase=document.getElementById('pipelineStepper')?document.getElementById('pipelineStepper').dataset.phase:'';
+        let lastPhase='';
         let lastMitCount=document.querySelectorAll('#mitigationsContainer .surface-inset').length;
-        const STATES=['ready','recon','dast_testing','poc_verification','blue_team_remediation','complete'];
 
-        function updateStepper(phase,isComplete){
-            const el=document.getElementById('pipelineStepper');if(!el)return;
-            const idx=isComplete?STATES.length:(STATES.indexOf(phase)>=0?STATES.indexOf(phase):0);
-            const prevIdx=parseInt(el.dataset.idx||'-1',10);
-            const steps=el.querySelectorAll('[data-step]');
-            steps.forEach((s,i)=>{
-                const circle=s.querySelector('[data-circle]');const line=s.querySelector('[data-line]');const label=s.querySelector('[data-label]');
-                if(!circle)return;
-                const advanced=i<=idx&&i>prevIdx;  // pop only steps that newly changed
-                if(i<idx){circle.className='w-6 h-6 rounded-full bg-white flex items-center justify-center';circle.innerHTML='<svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-ink-100';}
-                else if(i===idx){circle.className='w-6 h-6 rounded-full bg-white flex items-center justify-center pulse-ring';circle.innerHTML='<div class="w-2 h-2 rounded-full bg-black"></div>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-white font-medium';}
-                else{circle.className='w-6 h-6 rounded-full border border-ink-700 flex items-center justify-center';circle.innerHTML='<div class="w-1 h-1 rounded-full bg-ink-600"></div>';if(label)label.className='text-[10px] mt-1 text-center leading-tight text-ink-400';}
-                if(advanced){circle.classList.add('step-pop');setTimeout(()=>circle.classList.remove('step-pop'),450);}
-                if(line){line.className='flex-1 mx-1.5 h-px hidden sm:block '+(i<idx?'bg-white':'bg-ink-800');}
-            });
-            el.dataset.phase=phase;el.dataset.idx=String(idx);
-        }
+
 
         async function fetchMitigations(){
             try{const resp=await fetch('/api/jobs/'+JOB_ID+'/mitigations');if(!resp.ok)return;const mits=await resp.json();
@@ -583,16 +532,13 @@
         function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
         const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};
-            // Live stepper update
+            // Track phase for reload-on-first-transition (pending→recon)
             const phase=job.pipeline_phase||job.status||'';const isComplete=job.status==='complete';
-            if(phase!==lastPhase||isComplete){
-                // If we were on pending/ready and the scan just transitioned to a real
-                // phase (recon and beyond), do ONE reload to get a clean server render,
-                // then live updating takes over from there.
+            if(phase!==lastPhase){
                 const wasWaiting=(lastPhase===''||lastPhase==='pending'||lastPhase==='ready');
                 const nowRunning=phase&&phase!=='pending'&&phase!=='ready';
                 if(wasWaiting&&nowRunning&&!isComplete){lastPhase=phase;window.location.reload();return;}
-                lastPhase=phase;updateStepper(isComplete?'complete':phase,isComplete);
+                lastPhase=phase;
             }
             // Live graph update
             const nr=ag.tool_results||[];const nv=ag.vulnerabilities||[];let changed=false;
