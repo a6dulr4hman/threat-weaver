@@ -90,7 +90,10 @@
     <script>
     // Global helper — returns Authorization header with the current Clerk session token.
     // All API fetch calls use this so the backend can verify the user.
-    window.getAuthHeaders = function() { return {}; }; // overwritten below once Clerk loads    (function() {
+    // Fallback until Clerk loads
+    window.getAuthHeaders = async function() { return {}; };
+
+    (function() {
         const pk = '{{ clerk_pk }}';
         const CDN_PRIMARY  = 'https://clerk.clerk.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
         const CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
