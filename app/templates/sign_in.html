@@ -72,113 +72,97 @@
 
         <script>
         (function () {
-            // Derive the Clerk Frontend API host from the publishable key.
-            // Format: pk_test_<base64-encoded-frontend-api-host>_<suffix>
-            // or pk_live_<base64-encoded-frontend-api-host>_<suffix>
             const pk = '{{ clerk_pk }}';
 
-            function getFrontendApiUrl(publishableKey) {
+            function showError(msg) {
+                const loader = document.getElementById('clerk-loading');
+                if (loader) loader.remove();
+                const el = document.getElementById('clerk-error');
+                if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+            }
+
+            async function mountClerk() {
+                // Guard: Clerk JS must have defined window.Clerk
+                if (typeof window.Clerk === 'undefined') {
+                    showError('Clerk library failed to load. Check your network connection.');
+                    return;
+                }
                 try {
-                    // The middle segment is a base64url-encoded host + \0 + version
-                    const parts = publishableKey.split('_');
-                    // parts = ["pk", "test"|"live", "<b64>", "<hash>"]
-                    if (parts.length < 3) throw new Error('bad key format');
-                    const decoded = atob(parts[2]);
-                    // decoded is something like "clerk.example.com\0" or "example.accounts.dev\0"
-                    const host = decoded.replace(/\0.*$/, '').replace(/\/$/, '');
-                    return `https://${host}`;
-                } catch (e) {
-                    // Fallback: use the standard Clerk jsDelivr CDN bundle.
-                    // This works for most standard Clerk setups.
-                    return null;
+                    const clerk = new window.Clerk(pk);
+                    await clerk.load();
+
+                    if (clerk.user) {
+                        window.location.href = '/';
+                        return;
+                    }
+
+                    const loader = document.getElementById('clerk-loading');
+                    if (loader) loader.remove();
+                    const mount = document.getElementById('clerk-mount');
+                    if (mount) mount.classList.remove('hidden');
+                    const toggle = document.getElementById('sign-toggle');
+                    if (toggle) toggle.classList.remove('hidden');
+
+                    const opts = {
+                        routing: 'hash',
+                        {% if mode == "sign_up" %}
+                        afterSignUpUrl: '/',
+                        signInUrl: '/sign-in',
+                        {% else %}
+                        afterSignInUrl: '/',
+                        signUpUrl: '/sign-up',
+                        {% endif %}
+                    };
+
+                    {% if mode == "sign_up" %}
+                    clerk.mountSignUp(mount, opts);
+                    {% else %}
+                    clerk.mountSignIn(mount, opts);
+                    {% endif %}
+                } catch (err) {
+                    showError('Could not initialise Clerk: ' + err.message);
                 }
             }
 
-            function loadClerkScript(src, onLoad, onError) {
+            // Use the Clerk-provided publishable key URL pattern.
+            // Build the frontend API host from the key itself:
+            // pk_[test|live]_<base64(host + "$")>
+            function clerkScriptUrl() {
+                try {
+                    // Clerk encodes the Frontend API host as base64(host + "$") in the key
+                    const b64 = pk.split('_')[2];
+                    if (!b64) throw new Error('bad key');
+                    const raw = atob(b64);          // e.g. "foo-bar.clerk.accounts.dev$"
+                    const host = raw.split('$')[0].split('\0')[0].trim();
+                    if (host && host.includes('.')) {
+                        return `https://${host}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
+                    }
+                } catch (_) {}
+                return null;
+            }
+
+            function loadScript(src, onSuccess, onFail) {
                 const s = document.createElement('script');
                 s.src = src;
-                s.crossOrigin = 'anonymous';
-                s.onload = onLoad;
-                s.onerror = onError;
+                s.onload = onSuccess;
+                s.onerror = onFail;
                 document.head.appendChild(s);
             }
 
-            function showError(msg) {
-                document.getElementById('clerk-loading').remove();
-                const el = document.getElementById('clerk-error');
-                el.textContent = msg;
-                el.classList.remove('hidden');
+            const primary = clerkScriptUrl();
+            const fallback = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+
+            if (primary) {
+                loadScript(primary, mountClerk, () =>
+                    loadScript(fallback, mountClerk, () =>
+                        showError('Failed to load Clerk.js. Check your network.')
+                    )
+                );
+            } else {
+                loadScript(fallback, mountClerk, () =>
+                    showError('Failed to load Clerk.js. Check your network.')
+                );
             }
-
-            async function initClerk() {
-                const frontendApi = getFrontendApiUrl(pk);
-
-                // Primary: load from the app's own Clerk Frontend API (fastest, most reliable).
-                // Fallback: jsDelivr CDN (works but slightly slower + may have version lag).
-                const primarySrc = frontendApi
-                    ? `${frontendApi}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`
-                    : null;
-                const fallbackSrc = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
-
-                function mountClerk() {
-                    (async () => {
-                        try {
-                            const clerk = new window.Clerk(pk);
-                            await clerk.load();
-
-                            // Already signed in — go to dashboard.
-                            if (clerk.user) {
-                                window.location.href = '/';
-                                return;
-                            }
-
-                            // Swap loading skeleton for the real component.
-                            document.getElementById('clerk-loading').remove();
-                            const mount = document.getElementById('clerk-mount');
-                            mount.classList.remove('hidden');
-                            document.getElementById('sign-toggle').classList.remove('hidden');
-
-                            const opts = {
-                                routing: 'hash',
-                                {% if mode == "sign_up" %}
-                                afterSignUpUrl: '/',
-                                signInUrl: '/sign-in',
-                                {% else %}
-                                afterSignInUrl: '/',
-                                signUpUrl: '/sign-up',
-                                {% endif %}
-                            };
-
-                            {% if mode == "sign_up" %}
-                            clerk.mountSignUp(mount, opts);
-                            {% else %}
-                            clerk.mountSignIn(mount, opts);
-                            {% endif %}
-                        } catch (err) {
-                            showError('Could not initialise Clerk: ' + err.message);
-                        }
-                    })();
-                }
-
-                if (primarySrc) {
-                    loadClerkScript(
-                        primarySrc,
-                        mountClerk,
-                        () => {
-                            // Primary failed — try jsDelivr fallback.
-                            loadClerkScript(fallbackSrc, mountClerk, () =>
-                                showError('Failed to load Clerk. Check your network and Clerk keys.')
-                            );
-                        }
-                    );
-                } else {
-                    loadClerkScript(fallbackSrc, mountClerk, () =>
-                        showError('Failed to load Clerk. Check your network and Clerk keys.')
-                    );
-                }
-            }
-
-            initClerk();
         })();
         </script>
 
