@@ -88,21 +88,35 @@
 
     {% if clerk_pk is defined and clerk_pk %}
     <script>
-    // Load Clerk.js from the app's own Clerk Frontend API domain (fastest),
-    // with jsDelivr CDN as fallback.
     (function() {
         const pk = '{{ clerk_pk }}';
-        function getClerkSrc(key) {
+
+        function clerkScriptUrl(key) {
             try {
-                const host = atob(key.split('_')[2]).replace(/\0.*$/, '').replace(/\/$/, '');
-                return `https://${host}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
-            } catch(e) { return 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js'; }
+                const raw = atob(key.split('_')[2]);
+                const host = raw.split('$')[0].split('\0')[0].trim();
+                if (host && host.includes('.')) {
+                    return `https://${host}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
+                }
+            } catch(_) {}
+            return null;
         }
-        const script = document.createElement('script');
-        script.src = getClerkSrc(pk);
-        script.crossOrigin = 'anonymous';
-        script.onerror = () => { script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js'; document.head.appendChild(script); };
-        script.onload = async () => {
+
+        function loadScript(src, cb) {
+            const s = document.createElement('script');
+            s.src = src;
+            s.onload = cb;
+            s.onerror = () => {
+                // Primary failed — try jsDelivr
+                if (src !== 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js') {
+                    loadScript('https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js', cb);
+                }
+            };
+            document.head.appendChild(s);
+        }
+
+        async function initNav() {
+            if (typeof window.Clerk === 'undefined') return;
             const clerk = new window.Clerk(pk);
             await clerk.load();
 
@@ -117,8 +131,8 @@
                 if (u.imageUrl) {
                     userAvatar.innerHTML = `<img src="${u.imageUrl}" class="w-6 h-6 rounded-full object-cover" alt="">`;
                 } else {
-                    const name = u.firstName || u.emailAddresses?.[0]?.emailAddress || '?';
-                    userAvatar.textContent = name[0].toUpperCase();
+                    const name = (u.firstName || u.emailAddresses?.[0]?.emailAddress || '?')[0].toUpperCase();
+                    userAvatar.textContent = name;
                 }
                 userEmail.textContent = u.primaryEmailAddress?.emailAddress || u.firstName || 'Account';
                 userMenu.classList.remove('hidden');
@@ -130,8 +144,11 @@
             } else {
                 signInLink.classList.remove('hidden');
             }
-        };
-        document.head.appendChild(script);
+        }
+
+        const primary = clerkScriptUrl(pk);
+        const src = primary || 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+        loadScript(src, initNav);
     })();
     </script>
     {% endif %}
