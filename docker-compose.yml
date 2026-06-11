@@ -1,0 +1,67 @@
+services:
+
+  # ── ThreatWeaver — main application ─────────────────────────────────────
+  threatweaver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: threatweaver:latest
+    container_name: threatweaver
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - tw_data:/data                       # SQLite database
+      - tw_reports:/tmp/threatweaver/reports  # generated PDF reports
+    environment:
+      # ── Required ─────────────────────────────────────────────────────────
+      SECRET_KEY: ${SECRET_KEY}
+      K2_API_KEY: ${K2_API_KEY}
+
+      # ── Clerk auth (leave blank to run without auth) ──────────────────────
+      CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+
+      # ── Optional ─────────────────────────────────────────────────────────
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+      DATABASE_URL: sqlite+aiosqlite:////data/threatweaver.db
+      REPORT_DIR: /tmp/threatweaver/reports
+      CYCLE_BUDGET_SECONDS: ${CYCLE_BUDGET_SECONDS:-480}
+      MOCK_VERIFICATION: ${MOCK_VERIFICATION:-false}
+    networks:
+      - tw_net
+    depends_on:
+      nimbus-crm:
+        condition: service_healthy
+
+  # ── Nimbus CRM — intentionally vulnerable demo scan target ───────────────
+  # WARNING: deliberately insecure. Bind to 127.0.0.1 in production or
+  # keep behind a firewall. Never expose port 8080 to the public internet.
+  nimbus-crm:
+    build:
+      context: ./demo-target
+      dockerfile: Dockerfile
+    image: nimbus-crm:latest
+    container_name: nimbus-crm
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"   # reachable at http://localhost:8080 on the host
+    environment:
+      # Set this to the verification nonce shown in your ThreatWeaver workspace
+      # so the domain check passes when scanning http://nimbus-crm (container hostname).
+      TW_NONCE: ${TW_NONCE:-}
+    networks:
+      - tw_net
+
+# ── Volumes ──────────────────────────────────────────────────────────────
+volumes:
+  tw_data:
+  tw_reports:
+
+# ── Network ──────────────────────────────────────────────────────────────
+# Both containers share this network. Inside the network, ThreatWeaver can
+# reach Nimbus CRM as http://nimbus-crm (Docker DNS) on port 80.
+# Point a new workspace at "nimbus-crm" to scan the demo target directly.
+networks:
+  tw_net:
+    driver: bridge

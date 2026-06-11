@@ -565,9 +565,12 @@
             const isFinalized=isComplete&&ag.report&&ag.report.status&&ag.completed_at;
             if(isFinalized){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');
                 const li=document.getElementById('live-indicator');if(li)li.outerHTML='<span class="badge badge-green"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Complete</span>';
-                // Freeze the timer immediately using the committed completed_at value.
+                // Freeze the timer with the committed completed_at, then reload
+                // immediately so the server-rendered report link, severity badge,
+                // and K2 assessment table all appear. Tokens/mitigations/graph
+                // have been updating live throughout so nothing is lost.
                 if(window.__updateScanTimer)window.__updateScanTimer(ag.started_at,ag.completed_at);
-                setTimeout(()=>window.location.reload(),2000);}
+                window.location.reload();}
         }catch(e){}},3000);
         }
         window.__startLivePoll=startLivePoll;

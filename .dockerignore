@@ -1,0 +1,55 @@
+# ── Version control ──────────────────────────────────────────────────────
+.git
+.gitignore
+
+# ── Environment & secrets ────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python cache / build artefacts ───────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ─────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Tests (not needed at runtime) ────────────────────────────────────────
+tests/
+pytest.ini
+.pytest_cache/
+
+# ── Local database & generated reports ───────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+/tmp/
+
+# ── IDE / editor noise ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ── Demo target (has its own image) ──────────────────────────────────────
+demo-target/
+
+# ── Docs & CI ────────────────────────────────────────────────────────────
+README.md
+.github/
+*.md
+
+# ── Agent task files ─────────────────────────────────────────────────────
+.agents/
