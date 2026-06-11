@@ -643,7 +643,25 @@ class OrchestratorFSM:
             ):
                 anomalies += 1
 
-        # Patch-derived risk is most trustworthy — use it if available.
+        # Also read severity signals from the correlation layer and the K2
+        # final assessment — both may have higher evidence than patch risk_level.
+        canonical = self.attack_graph.get("vulnerabilities") or []
+        for v in canonical:
+            lvl = str(v.get("severity") or "").lower()
+            highest_patch_risk = max(highest_patch_risk, risk_order.get(lvl, 0))
+
+        assessment = self.attack_graph.get("final_assessment") or {}
+        # overall_risk from K2 assessment
+        k2_risk = str(assessment.get("overall_risk") or "").lower()
+        # also walk individual vulnerabilities in the assessment
+        for v in (assessment.get("vulnerabilities") or []):
+            lvl = str(v.get("severity") or "").lower()
+            highest_patch_risk = max(highest_patch_risk, risk_order.get(lvl, 0))
+        # Map K2's overall_risk string directly
+        k2_score = risk_order.get(k2_risk, 0)
+        highest_patch_risk = max(highest_patch_risk, k2_score)
+
+        # Patch-derived / K2-assessment risk is most trustworthy — use it if available.
         if highest_patch_risk >= 4:
             return "extreme"
         if highest_patch_risk == 3:
@@ -753,6 +771,12 @@ class OrchestratorFSM:
         assessment = await self._generate_final_assessment(correlated)
         if assessment:
             self.attack_graph["final_assessment"] = assessment
+
+        # Re-score severity now that the K2 assessment + correlation are available.
+        # The first _score_severity() call above was a quick bootstrap; this one
+        # has full access to final_assessment.vulnerabilities and canonical vulns.
+        severity = self._score_severity()
+        self.attack_graph["overall_severity"] = severity
 
         # Persist severity onto the job row too.
         stmt = select(AnalysisJob).where(AnalysisJob.id == self.job_id)
