@@ -76,7 +76,7 @@ document.getElementById('create-workspace-form').addEventListener('submit', asyn
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     const authHeaders = window.getAuthHeaders ? await window.getAuthHeaders() : {};
-    const response = await fetch('/api/workspaces', {
+    const response = await fetch('/api/workspaces/', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', ...authHeaders},
         body: JSON.stringify({target_url: targetUrl})
