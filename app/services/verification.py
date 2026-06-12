@@ -74,6 +74,16 @@ async def _resolve_txt(name: str) -> list[str]:
 # DNS TXT verification flow is being debugged. Remove once that is fixed.
 _TRUTHY = {"1", "true", "yes", "on"}
 
+# ---------------------------------------------------------------------------
+# Domain whitelist — these domains bypass DNS/HTTP verification entirely.
+# Populated from the VERIFIED_DOMAINS env var (comma-separated).
+# Defaults to "threat.falak.me" so that domain is always pre-approved.
+# ---------------------------------------------------------------------------
+def _whitelisted_domains() -> set[str]:
+    """Return the set of domains that skip ownership verification."""
+    env = os.getenv("VERIFIED_DOMAINS", "threat.falak.me")
+    return {d.strip().lower() for d in env.split(",") if d.strip()}
+
 
 def _mock_verification_enabled() -> bool:
     """Read the bypass flag at call time so it can be toggled per-environment."""
@@ -151,6 +161,14 @@ async def _check_http(target_url: str, expected_nonce: str) -> bool:
 
 async def verify_domain(target_url: str, expected_nonce: str) -> bool:
     """Verify domain ownership by checking DNS TXT record first, then HTTP fallback."""
+    # Whitelisted domains are pre-approved — no DNS/HTTP check needed.
+    if target_url.strip().lower() in _whitelisted_domains():
+        logger.info(
+            "Domain '%s' is in the verified whitelist — skipping ownership check.",
+            target_url,
+        )
+        return True
+
     # TEMPORARY bypass: auto-accept when MOCK_VERIFICATION is enabled.
     if _mock_verification_enabled():
         logger.warning(
