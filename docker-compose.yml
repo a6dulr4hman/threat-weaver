@@ -28,6 +28,8 @@ services:
       REPORT_DIR: /tmp/threatweaver/reports
       CYCLE_BUDGET_SECONDS: ${CYCLE_BUDGET_SECONDS:-480}
       MOCK_VERIFICATION: ${MOCK_VERIFICATION:-false}
+      # Comma-separated allowed origins for CORS (e.g. https://threatweaver.falak.me)
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     networks:
       - tw_net
     depends_on:
