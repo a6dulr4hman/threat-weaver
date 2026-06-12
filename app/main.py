@@ -4,7 +4,11 @@ from contextlib import asynccontextmanager
 from typing import Optional
 from pathlib import Path
 
+import os
+
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
@@ -34,6 +38,24 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ThreatWeaver", lifespan=lifespan)
 
+# ---------------------------------------------------------------------------
+# CORS — required when the browser makes cross-origin API calls from HTTPS.
+# Reads CORS_ORIGINS from the environment (comma-separated list of allowed
+# origins). Falls back to the same-origin policy only when not set.
+# For a self-hosted single-domain deployment you can set:
+#   CORS_ORIGINS=https://threatweaver.falak.me
+# ---------------------------------------------------------------------------
+_raw_origins = os.getenv("CORS_ORIGINS", "")
+_allow_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allow_origins or [],  # empty = same-origin only (default)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 app.include_router(workspaces.router)
@@ -55,13 +77,14 @@ async def auth_wall(request: Request, call_next):
     path = request.url.path
 
     # Skip middleware for API, static files, verification endpoint, and
-    # the Clerk-hosted pages themselves.
+    # the Clerk-hosted pages themselves. Also skip OPTIONS preflight requests
+    # (CORS preflights never carry auth headers — blocking them causes 307).
     if (
         not _AUTH_ENABLED
+        or request.method == "OPTIONS"
         or path.startswith("/api/")
         or path.startswith("/static/")
         or path in _PUBLIC_PATHS
-        # Let Clerk's JS and webhook paths through unconditionally.
         or path.startswith("/clerk")
     ):
         return await call_next(request)
