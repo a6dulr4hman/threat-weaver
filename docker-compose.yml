@@ -30,6 +30,8 @@ services:
       MOCK_VERIFICATION: ${MOCK_VERIFICATION:-false}
       # Comma-separated allowed origins for CORS (e.g. https://threatweaver.falak.me)
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # Comma-separated domains that skip DNS ownership verification
+      VERIFIED_DOMAINS: ${VERIFIED_DOMAINS:-threat.falak.me}
     networks:
       - tw_net
     depends_on:
