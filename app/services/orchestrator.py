@@ -825,111 +825,6 @@ class OrchestratorFSM:
         if thoughts:
             self.attack_graph["structured_thoughts"] = thoughts
 
-    # --- Concurrent GitHub PR automation ----------------------------------
-
-    async def _generate_secondary_patches(self, api_key: str) -> list[dict]:
-        """
-        Generate a remediation patch set using a SECONDARY K2 key, intended to
-        run concurrently with report generation (driven by the main key).
-
-        Re-runs the remediation.py logic over the canonical correlated
-        vulnerabilities to produce reviewable patches for a Pull Request.
-        Best-effort and offline-safe: returns [] when no key/vulnerabilities are
-        available or on any error, and never touches self.db (so it can run in
-        parallel with the report's DB-bound work without session contention).
-        Token usage is folded into the running counter.
-        """
-        from app.services.remediation import RemediationService
-
-        canonical = self.attack_graph.get("vulnerabilities") or []
-        if not canonical:
-            return []
-        client = LLMClient(api_key=api_key)
-        if not client.api_key:
-            return []
-
-        svc = RemediationService(llm_client=client)
-        patches: list[dict] = []
-        for vuln in canonical[:MAX_PATCHES]:
-            try:
-                vuln_node = (
-                    vuln.get("name") or vuln.get("category") or vuln.get("id")
-                    or "finding"
-                )
-                detection = vuln.get("detection") or {}
-                verification = vuln.get("verification") or {}
-                # Hand the strongest evidence we have to the remediation model
-                # as the "source" context for the patch.
-                source_ctx = "\n".join(
-                    part for part in [
-                        f"Category: {vuln.get('category', '')}",
-                        f"Endpoint: {vuln.get('endpoint', '')}",
-                        f"Severity: {vuln.get('severity', '')}",
-                        f"Evidence: {detection.get('evidence') or verification.get('detail') or ''}",
-                    ] if part.strip().rsplit(':', 1)[-1].strip()
-                )
-                finding = await svc.generate_patch(
-                    self.job_id, vuln_node, source_ctx
-                )
-                self._accumulate_usage(getattr(client, "last_usage", None))
-                patches.append({
-                    "vuln_node": vuln_node,
-                    "name": vuln.get("name"),
-                    "category": vuln.get("category"),
-                    "endpoint": vuln.get("endpoint"),
-                    "risk_level": finding.get("risk_level"),
-                    "cves": finding.get("cves", []),
-                    "description": finding.get("description"),
-                    "recommendation": finding.get("recommendation"),
-                    "code": finding.get("code"),
-                })
-            except Exception:
-                # One failed patch must not abort the whole PR pipeline.
-                continue
-
-        if patches:
-            self.attack_graph["pr_patches"] = patches
-        return patches
-
-    async def _maybe_open_patch_pr(self, patches: list[dict]) -> None:
-        """
-        Open a remediation Pull Request on the target repository (best-effort).
-
-        Records the outcome on attack_graph["github_pr"] and, on success, copies
-        the PR URL onto the report status so the job UI can link to it. Lazily
-        imports the bot so a missing PyGithub dependency never breaks import.
-        """
-        if not patches:
-            return
-        from app.services.github_bot import GitHubBot
-
-        bot = GitHubBot()
-        if not bot.is_configured():
-            self.attack_graph["github_pr"] = {
-                "status": "skipped",
-                "reason": (
-                    "GitHub PR automation not configured "
-                    "(set GITHUB_PAT and GITHUB_TARGET_REPO, and install PyGithub)."
-                ),
-            }
-            return
-
-        target = await self._get_workspace_target()
-        summary = (
-            self.attack_graph.get("k2_summary")
-            or (self.attack_graph.get("final_assessment") or {}).get("executive_summary")
-        )
-        result = await bot.create_patch_pr(
-            self.job_id[:8], patches, target_url=target, summary=summary
-        )
-        self.attack_graph["github_pr"] = result
-        # Surface the PR link on the report status too (the UI reads either).
-        if (
-            isinstance(self.attack_graph.get("report"), dict)
-            and result.get("url")
-        ):
-            self.attack_graph["report"]["pr_url"] = result["url"]
-
     async def _finalize_and_report(self) -> None:
         """
         Phase 6: score severity, persist it, and generate the PDF report.
@@ -984,20 +879,7 @@ class OrchestratorFSM:
             if self.attack_graph.get("structured_thoughts") is not None:
                 job.structured_thoughts = self.attack_graph["structured_thoughts"]
 
-        # ── Concurrent GitHub PR automation ──────────────────────────────
-        # When a SECONDARY K2 key (K2_API_KEY_2) is configured, generate the
-        # remediation patch set IN PARALLEL with PDF report generation: the main
-        # key drives the report while the secondary key runs remediation.py, so
-        # the two LLM/IO-bound workloads don't serialise. The task is launched
-        # here and awaited after the report so both products are ready before we
-        # open the Pull Request.
-        secondary_key = os.getenv("K2_API_KEY_2")
-        pr_patches_task = None
-        if secondary_key:
-            pr_patches_task = asyncio.ensure_future(
-                self._generate_secondary_patches(secondary_key)
-            )
-
+        # ── PDF Report generation ────────────────────────────────────────────
         try:
             report_svc = ReportService()
             # Expire the session cache so _load_mitigations sees the rows that
@@ -1018,16 +900,6 @@ class OrchestratorFSM:
             _log.exception("PDF generation failed for job %s", self.job_id)
 
         self.attack_graph["report"] = status
-
-        # Now that BOTH the report and the concurrently-generated patch set are
-        # ready, open the remediation Pull Request and attach its link to the
-        # report (surfaced in the job UI). Best-effort: never blocks finalize.
-        if pr_patches_task is not None:
-            try:
-                pr_patches = await pr_patches_task
-            except Exception:
-                pr_patches = []
-            await self._maybe_open_patch_pr(pr_patches)
 
         # Only now is the job truly finished — stamp pipeline_phase so the
         # UI stepper advances to "Complete" only once the report exists.
