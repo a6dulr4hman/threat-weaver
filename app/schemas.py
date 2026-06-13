@@ -72,6 +72,7 @@ class JobResponse(BaseModel):
     pipeline_phase: Optional[str] = None
     overall_severity: Optional[str] = None
     attack_graph_data: Any = None
+    structured_thoughts: Any = None
 
     model_config = {"from_attributes": True}
 

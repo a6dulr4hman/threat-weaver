@@ -6,13 +6,16 @@ WORKDIR /app
 # ---------------------------------------------------------------------------
 # System dependencies — everything the app needs to run, installed once.
 # nmap: port/service scanning (run_nmap tool)
+# git:  clone/patch target repos for the automated PR / remediation workflow
 # iputils-ping: used if any future diagnostic tool needs ping
 # curl: useful for health-check debugging
 # We set the setuid bit on nmap so the non-root app user can run raw-socket
 # version probes without needing NET_RAW capabilities.
+# Pre-installing these here means the agent never attempts a runtime install.
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         nmap \
+        git \
         iputils-ping \
         curl \
         libssl-dev \

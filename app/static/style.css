@@ -432,3 +432,101 @@ main > *:nth-child(9)  { animation-delay: 0.32s; }
         transition-duration: 0.001ms !important;
     }
 }
+
+
+
+/* ============================================================
+   Structured thought timeline (K2-Think-v2 reasoning stream)
+   Vertical, top-to-bottom graph of connected nodes/circles.
+   ============================================================ */
+.tw-timeline {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    position: relative;
+}
+
+/* The continuous connecting line running down through every node. */
+.tw-timeline::before {
+    content: '';
+    position: absolute;
+    left: 7px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    background: linear-gradient(
+        to bottom,
+        rgba(74, 222, 128, 0.55),
+        rgba(255, 255, 255, 0.12)
+    );
+    border-radius: 2px;
+}
+
+.tw-timeline-item {
+    position: relative;
+    padding-left: 2rem;
+    padding-bottom: 1.1rem;
+}
+
+.tw-timeline-item:last-child {
+    padding-bottom: 0;
+}
+
+/* The connected node/circle for each reasoning step. */
+.tw-timeline-node {
+    position: absolute;
+    left: 0;
+    top: 4px;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 2px solid #4ade80;
+    box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.12);
+    z-index: 1;
+    animation: popIn 0.42s cubic-bezier(0.2, 0.8, 0.2, 1.2) both;
+}
+
+.tw-timeline-card {
+    background: #050505;
+    border: 1px solid var(--border);
+    border-radius: 0.625rem;
+    padding: 0.7rem 0.9rem;
+    transition: border-color 0.2s ease, background 0.2s ease;
+    animation: slideFade 0.45s ease both;
+}
+
+.tw-timeline-card:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+}
+
+.tw-timeline-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.tw-timeline-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: -0.01em;
+}
+
+.tw-timeline-time {
+    font-family: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.6875rem;
+    color: var(--muted-2);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.tw-timeline-details {
+    margin-top: 0.3rem;
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    color: var(--muted);
+}

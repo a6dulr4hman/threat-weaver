@@ -24,6 +24,10 @@ class AnalysisJob(Base):
     pipeline_phase = Column(String(50), nullable=True, default="ready")
     overall_severity = Column(String(20), nullable=True)
     attack_graph_data = Column(JSON, nullable=True)
+    # Linear, LLM-structured view of the K2-Think-v2 <think> reasoning stream,
+    # rendered as a top-to-bottom thought timeline in the UI. Shape:
+    # [{"step_title": str, "details": str, "timestamp": ISO-8601 str}, ...]
+    structured_thoughts = Column(JSON, nullable=True)
 
 
 class Mitigation(Base):

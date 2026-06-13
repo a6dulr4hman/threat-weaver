@@ -9,3 +9,4 @@ reportlab
 python-dotenv
 dnspython
 PyJWT[crypto]
+PyGithub

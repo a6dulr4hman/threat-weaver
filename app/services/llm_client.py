@@ -9,6 +9,8 @@ same gateway constraints apply:
 * a 60,000 token context budget
 * a strict ceiling of 30 requests per minute
 """
+from __future__ import annotations
+
 import asyncio
 import os
 import time
@@ -74,8 +76,11 @@ _RATE_LIMITER = _AsyncRateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_PERIOD)
 class LLMClient:
     """K2-Think-v2 client with 120s timeout, 60k token guard, and 30 rpm cap."""
 
-    def __init__(self):
-        self.api_key = os.getenv("K2_API_KEY", "")
+    def __init__(self, api_key: str | None = None):
+        # Allow an explicit key (e.g. a secondary K2_API_KEY_2 used to run patch
+        # generation concurrently with the main key) and fall back to the
+        # standard K2_API_KEY environment variable when none is supplied.
+        self.api_key = api_key if api_key is not None else os.getenv("K2_API_KEY", "")
         self.base_url = K2_BASE_URL
         self.model = K2_MODEL
         self.timeout = REQUEST_TIMEOUT

@@ -38,6 +38,14 @@ SKIP_ROUTE_PATHS = {"/", "/logout", "/threatweaver.txt"}
 # Set to 7 to match the number of vulnerabilities in the Nimbus CRM demo target.
 MAX_PATCHES = 7
 
+# Agentic self-correction guardrail: the maximum number of CONSECUTIVE tool
+# execution failures the agent may hit before the orchestrator aborts the loop.
+# On each failure the Python exception is fed back to the model as a corrective
+# system directive so it can analyse the failure and propose alternative
+# parameters; after MAX_RETRIES straight failures we stop to prevent an infinite
+# self-correction loop (a counter is reset to 0 by the next successful tool call).
+MAX_RETRIES = 3
+
 # Hard wall-clock budget for a single run_cycle, in seconds.
 # With K2's 30 rpm cap and 120s per-call timeout, 20 iterations realistically
 # takes 2-5 minutes. Setting this to 5 minutes gives headroom while preventing
@@ -141,6 +149,9 @@ class OrchestratorFSM:
         self._semaphore = asyncio.Semaphore(5)  # Token bucket: max 5 concurrent LLM calls
         self._seen_hashes: set[str] = set()
         self.cycle_budget_seconds = DEFAULT_CYCLE_BUDGET_SECONDS
+        # The K2 agent for the current run_cycle; set in run_cycle so the
+        # finalizer can format its captured <think> reasoning into a timeline.
+        self._agent = None
 
     async def hydrate_state(self) -> None:
         """Load current state from analysis_jobs table."""
@@ -173,6 +184,10 @@ class OrchestratorFSM:
             job.status = self.state.value
             job.pipeline_phase = self.pipeline_phase.value
             job.attack_graph_data = self.attack_graph
+            # Persist the structured thought timeline to its dedicated column
+            # when it has been generated (at finalization).
+            if self.attack_graph.get("structured_thoughts") is not None:
+                job.structured_thoughts = self.attack_graph["structured_thoughts"]
             await self.db.commit()
 
     def transition(self, new_state: FSMState) -> bool:
@@ -226,11 +241,15 @@ class OrchestratorFSM:
 
         target = await self._get_workspace_target()
         agent = K2Agent(llm_client=self.llm_client)
+        self._agent = agent
         executor = ToolExecutor(
             job_id=self.job_id, mcp_client=self.mcp_client, llm_client=self.llm_client
         )
 
         deadline = time.monotonic() + self.cycle_budget_seconds
+        # Agentic self-correction: count consecutive tool failures so we can
+        # feed the exception back to the model and abort after MAX_RETRIES.
+        consecutive_tool_failures = 0
         try:
             for iteration in range(MAX_ITERATIONS):
                 # Wall-clock guardrail: a slow reasoning model (30 rpm, 120s per
@@ -359,7 +378,14 @@ class OrchestratorFSM:
                             await self.save_state()
                             continue
 
-                    result = await executor.execute(tool_name, arguments)
+                    # Wrap tool execution so an unexpected exception (the
+                    # ToolExecutor already catches most, but defence in depth)
+                    # never aborts the loop silently — it becomes a structured
+                    # error result the self-correction logic can act on.
+                    try:
+                        result = await executor.execute(tool_name, arguments)
+                    except Exception as exc:  # pragma: no cover - executor guards
+                        result = {"error": f"Tool execution failed: {exc}"}
                     # generate_patch invokes K2-Think-v2 inside the executor
                     # (via RemediationService, which shares self.llm_client), so
                     # capture those tokens too — they were previously lost.
@@ -377,6 +403,42 @@ class OrchestratorFSM:
                     })
                     # Feed result back to K2
                     agent.feed_result(tool_name, result)
+
+                    # --- Agentic self-correction ---------------------------
+                    # If the tool failed (timeout, invalid parameters, target
+                    # error, ...), feed the exception back to the model as a
+                    # corrective system directive so it can analyse the failure
+                    # and try alternative parameters. A strict MAX_RETRIES
+                    # counter on CONSECUTIVE failures prevents an infinite
+                    # self-correction loop; a successful call resets it.
+                    if isinstance(result, dict) and result.get("error"):
+                        consecutive_tool_failures += 1
+                        error_text = result.get("error")
+                        self.attack_graph.setdefault("tool_failures", []).append({
+                            "iteration": iteration,
+                            "tool": tool_name,
+                            "arguments": arguments,
+                            "error": error_text,
+                            "retry": consecutive_tool_failures,
+                        })
+                        agent.feed_system(
+                            f"Tool execution failed: {error_text}. Analyze the "
+                            "failure and provide alternative parameters."
+                        )
+                        if consecutive_tool_failures >= MAX_RETRIES:
+                            self.attack_graph["stopped_reason"] = (
+                                f"Aborted after {MAX_RETRIES} consecutive tool "
+                                "failures (self-correction limit reached)."
+                            )
+                            await self.save_state()
+                            break
+                        # Don't advance FSM state or budgets on a failed tool;
+                        # let the model retry with corrected parameters.
+                        await self.save_state()
+                        continue
+                    else:
+                        # A successful tool call clears the failure streak.
+                        consecutive_tool_failures = 0
 
                     # Record a successfully patched node (dedup + budget above)
                     # and persist the full structured finding to the mitigations
@@ -737,6 +799,137 @@ class OrchestratorFSM:
             # Storage failure must not crash the analysis loop.
             pass
 
+    async def _generate_structured_thoughts(self) -> None:
+        """
+        Format the agent's captured <think> reasoning into a linear thought
+        timeline and stash it on attack_graph["structured_thoughts"].
+
+        Best-effort and offline-safe: returns immediately if no reasoning was
+        captured, uses its own LLMClient (so a mocked self.llm_client is never
+        disturbed), is bounded by a timeout, folds its token usage into the
+        running counter, and never raises.
+        """
+        agent = getattr(self, "_agent", None)
+        if agent is None or not getattr(agent, "raw_thoughts", None):
+            return
+        client = LLMClient()
+        thoughts: list = []
+        try:
+            thoughts = await asyncio.wait_for(
+                agent.format_thoughts(llm_client=client), timeout=120.0
+            )
+        except Exception:
+            thoughts = []
+        finally:
+            self._accumulate_usage(getattr(client, "last_usage", None))
+        if thoughts:
+            self.attack_graph["structured_thoughts"] = thoughts
+
+    # --- Concurrent GitHub PR automation ----------------------------------
+
+    async def _generate_secondary_patches(self, api_key: str) -> list[dict]:
+        """
+        Generate a remediation patch set using a SECONDARY K2 key, intended to
+        run concurrently with report generation (driven by the main key).
+
+        Re-runs the remediation.py logic over the canonical correlated
+        vulnerabilities to produce reviewable patches for a Pull Request.
+        Best-effort and offline-safe: returns [] when no key/vulnerabilities are
+        available or on any error, and never touches self.db (so it can run in
+        parallel with the report's DB-bound work without session contention).
+        Token usage is folded into the running counter.
+        """
+        from app.services.remediation import RemediationService
+
+        canonical = self.attack_graph.get("vulnerabilities") or []
+        if not canonical:
+            return []
+        client = LLMClient(api_key=api_key)
+        if not client.api_key:
+            return []
+
+        svc = RemediationService(llm_client=client)
+        patches: list[dict] = []
+        for vuln in canonical[:MAX_PATCHES]:
+            try:
+                vuln_node = (
+                    vuln.get("name") or vuln.get("category") or vuln.get("id")
+                    or "finding"
+                )
+                detection = vuln.get("detection") or {}
+                verification = vuln.get("verification") or {}
+                # Hand the strongest evidence we have to the remediation model
+                # as the "source" context for the patch.
+                source_ctx = "\n".join(
+                    part for part in [
+                        f"Category: {vuln.get('category', '')}",
+                        f"Endpoint: {vuln.get('endpoint', '')}",
+                        f"Severity: {vuln.get('severity', '')}",
+                        f"Evidence: {detection.get('evidence') or verification.get('detail') or ''}",
+                    ] if part.strip().rsplit(':', 1)[-1].strip()
+                )
+                finding = await svc.generate_patch(
+                    self.job_id, vuln_node, source_ctx
+                )
+                self._accumulate_usage(getattr(client, "last_usage", None))
+                patches.append({
+                    "vuln_node": vuln_node,
+                    "name": vuln.get("name"),
+                    "category": vuln.get("category"),
+                    "endpoint": vuln.get("endpoint"),
+                    "risk_level": finding.get("risk_level"),
+                    "cves": finding.get("cves", []),
+                    "description": finding.get("description"),
+                    "recommendation": finding.get("recommendation"),
+                    "code": finding.get("code"),
+                })
+            except Exception:
+                # One failed patch must not abort the whole PR pipeline.
+                continue
+
+        if patches:
+            self.attack_graph["pr_patches"] = patches
+        return patches
+
+    async def _maybe_open_patch_pr(self, patches: list[dict]) -> None:
+        """
+        Open a remediation Pull Request on the target repository (best-effort).
+
+        Records the outcome on attack_graph["github_pr"] and, on success, copies
+        the PR URL onto the report status so the job UI can link to it. Lazily
+        imports the bot so a missing PyGithub dependency never breaks import.
+        """
+        if not patches:
+            return
+        from app.services.github_bot import GitHubBot
+
+        bot = GitHubBot()
+        if not bot.is_configured():
+            self.attack_graph["github_pr"] = {
+                "status": "skipped",
+                "reason": (
+                    "GitHub PR automation not configured "
+                    "(set GITHUB_PAT and GITHUB_TARGET_REPO, and install PyGithub)."
+                ),
+            }
+            return
+
+        target = await self._get_workspace_target()
+        summary = (
+            self.attack_graph.get("k2_summary")
+            or (self.attack_graph.get("final_assessment") or {}).get("executive_summary")
+        )
+        result = await bot.create_patch_pr(
+            self.job_id[:8], patches, target_url=target, summary=summary
+        )
+        self.attack_graph["github_pr"] = result
+        # Surface the PR link on the report status too (the UI reads either).
+        if (
+            isinstance(self.attack_graph.get("report"), dict)
+            and result.get("url")
+        ):
+            self.attack_graph["report"]["pr_url"] = result["url"]
+
     async def _finalize_and_report(self) -> None:
         """
         Phase 6: score severity, persist it, and generate the PDF report.
@@ -778,12 +971,32 @@ class OrchestratorFSM:
         severity = self._score_severity()
         self.attack_graph["overall_severity"] = severity
 
+        # Structure the K2-Think-v2 <think> reasoning stream into a linear thought
+        # timeline for the UI (best-effort, offline-safe — never blocks the report).
+        await self._generate_structured_thoughts()
+
         # Persist severity onto the job row too.
         stmt = select(AnalysisJob).where(AnalysisJob.id == self.job_id)
         result = await self.db.execute(stmt)
         job = result.scalar_one_or_none()
         if job:
             job.overall_severity = severity
+            if self.attack_graph.get("structured_thoughts") is not None:
+                job.structured_thoughts = self.attack_graph["structured_thoughts"]
+
+        # ── Concurrent GitHub PR automation ──────────────────────────────
+        # When a SECONDARY K2 key (K2_API_KEY_2) is configured, generate the
+        # remediation patch set IN PARALLEL with PDF report generation: the main
+        # key drives the report while the secondary key runs remediation.py, so
+        # the two LLM/IO-bound workloads don't serialise. The task is launched
+        # here and awaited after the report so both products are ready before we
+        # open the Pull Request.
+        secondary_key = os.getenv("K2_API_KEY_2")
+        pr_patches_task = None
+        if secondary_key:
+            pr_patches_task = asyncio.ensure_future(
+                self._generate_secondary_patches(secondary_key)
+            )
 
         try:
             report_svc = ReportService()
@@ -805,6 +1018,17 @@ class OrchestratorFSM:
             _log.exception("PDF generation failed for job %s", self.job_id)
 
         self.attack_graph["report"] = status
+
+        # Now that BOTH the report and the concurrently-generated patch set are
+        # ready, open the remediation Pull Request and attach its link to the
+        # report (surfaced in the job UI). Best-effort: never blocks finalize.
+        if pr_patches_task is not None:
+            try:
+                pr_patches = await pr_patches_task
+            except Exception:
+                pr_patches = []
+            await self._maybe_open_patch_pr(pr_patches)
+
         # Only now is the job truly finished — stamp pipeline_phase so the
         # UI stepper advances to "Complete" only once the report exists.
         self.pipeline_phase = FSMState.COMPLETE
