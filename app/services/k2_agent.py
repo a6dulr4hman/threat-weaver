@@ -19,7 +19,7 @@ from app.services.llm_json import (
 )
 
 # Guardrails to protect against infinite loops and token exhaustion
-MAX_ITERATIONS = 30
+MAX_ITERATIONS = 45
 MAX_HISTORY_MESSAGES = 30
 
 # The number of times the orchestrator will nudge the LLM if it fails to output valid JSON

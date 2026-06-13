@@ -34,17 +34,27 @@ ATTACK_TOOLS = {"send_http_request", "run_fuzzer"}
 # probed" finish isn't blocked waiting on them.
 SKIP_ROUTE_PATHS = {"/", "/logout", "/threatweaver.txt"}
 
-# Cap on how many remediation patches a single job may generate.
-# Set to 7 to match the number of vulnerabilities in the Nimbus CRM demo target.
-MAX_PATCHES = 7
+# Cap on how many remediation patches a single job may generate. Set above the
+# Nimbus CRM demo target's vulnerability count so the "remediation budget
+# reached, finish now" nudge never fires before the agent has covered the whole
+# attack surface.
+MAX_PATCHES = 12
+
+# How many times the orchestrator may REJECT the agent's attempt to finish while
+# discovered-but-unprobed endpoints remain. Each rejection feeds the agent the
+# unprobed list and forces it to keep probing, which is what drives full
+# coverage (and full vulnerability detection). MAX_ITERATIONS is the hard
+# backstop; this just prevents a stubborn agent from looping on "complete".
+COMPLETION_DEFERRAL_CAP = 15
 
 # Hard wall-clock budget for a single run_cycle, in seconds.
-# With K2's 30 rpm cap and 120s per-call timeout, 20 iterations realistically
-# takes 2-5 minutes. Setting this to 5 minutes gives headroom while preventing
-# a single stuck job from blocking the server for 10+ minutes.
+# K2's 30 rpm cap + 120s per-call timeout means a thorough scan that probes the
+# full attack surface (and patches findings) can take 10+ minutes. We give it
+# real headroom so the budget never cuts a scan short of full coverage; a truly
+# stuck job is still bounded by MAX_ITERATIONS.
 # Override with CYCLE_BUDGET_SECONDS env var if needed.
 DEFAULT_CYCLE_BUDGET_SECONDS = float(
-    os.getenv("CYCLE_BUDGET_SECONDS", "480")
+    os.getenv("CYCLE_BUDGET_SECONDS", "900")
 )
 
 
@@ -281,6 +291,35 @@ class OrchestratorFSM:
                 action = decision.get("action")
 
                 if action == "complete":
+                    # Coverage gate: do NOT let the agent stop while it still has
+                    # discovered-but-unprobed endpoints. The agent tends to
+                    # declare victory after a handful of findings, leaving whole
+                    # routes (e.g. /customers, /customer/<id>) untouched — which
+                    # is the difference between finding ~half the vulns and the
+                    # full set. We reject the early finish, hand it the concrete
+                    # unprobed list, and make it keep going. Bounded by
+                    # COMPLETION_DEFERRAL_CAP and, ultimately, MAX_ITERATIONS.
+                    remaining = self._coverage_remaining()
+                    deferrals = self.attack_graph.get("completion_deferrals", 0)
+                    if remaining and deferrals < COMPLETION_DEFERRAL_CAP:
+                        self.attack_graph["completion_deferrals"] = deferrals + 1
+                        preview = ", ".join(remaining[:10])
+                        agent.feed_note(
+                            "DO NOT finish yet — you have not probed every "
+                            "discovered endpoint. Coverage is incomplete. "
+                            f"Unprobed routes still to attack: {preview}. "
+                            "Probe EACH one with injection payloads suited to "
+                            "its parameters before completing: SQL injection in "
+                            "id / search / q parameters (e.g. \"1 OR 1=1\", "
+                            "\"' OR '1'='1\"), OS command injection in host / "
+                            "label / cmd parameters (e.g. \";id\", \"$(id)\", "
+                            "\"|| id\"), path traversal in file / path "
+                            "parameters (e.g. \"../../etc/passwd\"), and "
+                            "template/code injection in formula parameters. "
+                            "Only finish once every route above has been tested."
+                        )
+                        await self.save_state()
+                        continue
                     # K2 says we're done - advance to COMPLETE
                     self.attack_graph["k2_summary"] = decision.get("summary", "")
                     self._advance_to_complete()
@@ -1275,6 +1314,47 @@ class OrchestratorFSM:
                 continue
             unvisited.append(link)
         return unvisited
+
+    # --- Coverage gate (drives full endpoint exploration) -----------------
+
+    @staticmethod
+    def _coverage_template(path: str) -> str:
+        """
+        Collapse a path to a coverage 'template' so that distinct concrete URLs
+        of the same endpoint (e.g. /customer/1 and /customer/2) count as ONE
+        endpoint. Numeric segments become <id>; query strings are dropped.
+        """
+        p = (path or "/").split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+        segs = ["<id>" if seg.isdigit() else seg for seg in p.split("/")]
+        return "/".join(segs) or "/"
+
+    def _coverage_remaining(self) -> list[str]:
+        """
+        Endpoints that were DISCOVERED (from the source route map when present,
+        otherwise from links seen in HTML responses) but have NOT yet been
+        probed. Deduplicated by template so /customer/1..5 collapse to one, and
+        filtered against everything already attacked. An empty list means the
+        agent has covered the full known attack surface and may finish.
+        """
+        unprobed_routes = self._unprobed_routes()
+        if unprobed_routes:
+            candidates = [r.get("path", "") for r in unprobed_routes if r.get("path")]
+        else:
+            candidates = self._unvisited_links()
+
+        probed_templates = {
+            self._coverage_template(self._url_to_path(k))
+            for k in self.attack_graph.get("endpoint_attempts", {})
+        }
+        out: list[str] = []
+        seen: set[str] = set()
+        for cand in candidates:
+            tmpl = self._coverage_template(self._url_to_path(cand))
+            if tmpl in probed_templates or tmpl in seen:
+                continue
+            seen.add(tmpl)
+            out.append(cand)
+        return out
 
     # --- Final K2 vulnerability assessment --------------------------------
 
