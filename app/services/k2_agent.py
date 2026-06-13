@@ -9,15 +9,11 @@ tool requests after its internal <think> process, preventing infinite hallucinat
 from __future__ import annotations
 
 import json
-import re
-from datetime import datetime, timezone
 from typing import Dict, Any
 
 from app.services.llm_client import LLMClient
 from app.services.llm_json import (
-    extract_json_array,
     extract_json_object,
-    extract_think_block,
     is_api_error,
 )
 
@@ -208,34 +204,6 @@ CORRECTION_PROMPT = (
     '{"action": "complete", ...}), with no other text and no markdown fences.'
 )
 
-# System prompt for the thought-timeline formatting pass. The agent's reasoning
-# is captured verbatim from its <think> blocks during the scan; afterwards we
-# hand the ordered reasoning to K2 and ask it to distil the unstructured stream
-# into a strict JSON array of discrete, human-readable steps for the UI timeline.
-THOUGHT_TIMELINE_PROMPT = """You convert an autonomous security agent's raw \
-chain-of-thought into a clean, linear timeline of discrete reasoning steps for \
-display in a UI.
-
-You are given the agent's reasoning in chronological order, captured from its \
-<think> blocks (each with a timestamp). Distil it into a sequence of meaningful \
-steps a human can read top-to-bottom.
-
-Reply with EXACTLY ONE JSON array and nothing else (no prose, no markdown fences):
-[
-  {
-    "step_title": "<short imperative title, 8 words or fewer>",
-    "details": "<1-2 sentence plain-English explanation of what the agent reasoned or decided at this step>",
-    "timestamp": "<ISO-8601 timestamp>"
-  }
-]
-
-Rules you MUST follow:
-- Preserve chronological order.
-- Merge trivially-repeated thoughts; keep genuinely distinct decisions separate.
-- Echo the timestamp supplied for the corresponding thought block.
-- Output between 3 and 15 steps.
-- Base every step STRICTLY on the supplied reasoning — do NOT invent facts."""
-
 
 class K2Agent:
     """Autonomous agent that uses K2-Think-v2 to drive security analysis."""
@@ -243,9 +211,6 @@ class K2Agent:
     def __init__(self, llm_client: LLMClient | None = None):
         self.llm_client = llm_client or LLMClient()
         self.conversation_history: list[Dict[str, Any]] = []
-        # Raw <think> reasoning captured each turn, in order. Formatted into a
-        # structured thought timeline at finalization (see format_thoughts).
-        self.raw_thoughts: list[Dict[str, Any]] = []
 
     def build_state_message(self, context: Dict[str, Any]) -> str:
         """
@@ -369,20 +334,6 @@ class K2Agent:
                 {"role": "user", "content": CORRECTION_PROMPT},
             ]
 
-        # Capture the raw <think> reasoning from this turn so it can later be
-        # formatted into a structured, linear thought timeline for the UI. This
-        # is deliberately cheap string work with NO extra LLM call: decide()'s
-        # API-call count is asserted by tests, and the LLM formatting happens
-        # once, lazily, at finalization (see format_thoughts).
-        think = extract_think_block(final_response)
-        if think:
-            self.raw_thoughts.append({
-                "iteration": context.get("iteration"),
-                "phase": context.get("phase"),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "text": think,
-            })
-
         # Record this exchange in the rolling history to maintain context
         self.conversation_history.append(
             {"role": "user", "content": f"State: {state_message}"}
@@ -445,96 +396,3 @@ class K2Agent:
         snippet = response.strip()[:200]
         return {"action": "error", "detail": f"Could not parse K2 response: {snippet}"}
 
-    # ------------------------------------------------------------------ #
-    # Structured thought timeline                                         #
-    # ------------------------------------------------------------------ #
-
-    async def format_thoughts(self, llm_client: LLMClient | None = None) -> list[Dict[str, Any]]:
-        """
-        Convert the captured raw <think> reasoning into a strict JSON array
-        describing a linear thought timeline:
-
-            [{"step_title": str, "details": str, "timestamp": ISO}, ...]
-
-        An LLM does the structuring (its output parsed via
-        llm_json.extract_json_array), but this is fully offline-safe: with no
-        captured reasoning, no API key, or any error, it falls back to a
-        deterministic conversion of the raw thoughts so the timeline ALWAYS
-        renders. Token usage from the formatting call is left on the supplied
-        client's ``last_usage`` so the caller can fold it into a global counter.
-        """
-        if not self.raw_thoughts:
-            return []
-
-        client = llm_client or self.llm_client or LLMClient()
-        structured: list | None = None
-
-        # Only spend an API call when a key is configured; otherwise the
-        # deterministic fallback below keeps the feature working offline.
-        if getattr(client, "api_key", ""):
-            try:
-                payload = [
-                    {
-                        "index": i,
-                        "timestamp": t.get("timestamp"),
-                        "phase": t.get("phase"),
-                        "reasoning": t.get("text", ""),
-                    }
-                    for i, t in enumerate(self.raw_thoughts)
-                ]
-                messages = [
-                    {"role": "system", "content": THOUGHT_TIMELINE_PROMPT},
-                    {"role": "user", "content": json.dumps(payload, default=str)},
-                ]
-                raw = await client.chat(messages, role="general")
-                if isinstance(raw, str) and not is_api_error(raw):
-                    parsed = extract_json_array(raw)
-                    if isinstance(parsed, list):
-                        structured = parsed
-            except Exception:
-                structured = None
-
-        if structured is None:
-            structured = self._fallback_timeline()
-
-        return self._normalize_timeline(structured)
-
-    def _fallback_timeline(self) -> list[Dict[str, Any]]:
-        """Deterministically turn raw <think> blocks into timeline steps."""
-        steps: list[Dict[str, Any]] = []
-        for t in self.raw_thoughts:
-            text = (t.get("text") or "").strip()
-            if not text:
-                continue
-            # Use the first sentence as the step title, the rest as details.
-            first = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
-            title = first[:80] + ("..." if len(first) > 80 else "")
-            steps.append({
-                "step_title": title or "Reasoning step",
-                "details": text[:600],
-                "timestamp": t.get("timestamp"),
-            })
-        return steps
-
-    def _normalize_timeline(self, steps: list) -> list[Dict[str, Any]]:
-        """Validate/clean a timeline so every entry matches the strict schema."""
-        fallback_ts = [t.get("timestamp") for t in self.raw_thoughts]
-        normalized: list[Dict[str, Any]] = []
-        for i, step in enumerate(steps):
-            if not isinstance(step, dict):
-                continue
-            title = str(step.get("step_title") or step.get("title") or "").strip()
-            details = str(step.get("details") or step.get("detail") or "").strip()
-            if not title and not details:
-                continue
-            ts = step.get("timestamp")
-            if not ts and i < len(fallback_ts):
-                ts = fallback_ts[i]
-            if not ts:
-                ts = datetime.now(timezone.utc).isoformat()
-            normalized.append({
-                "step_title": title or "Reasoning step",
-                "details": details,
-                "timestamp": str(ts),
-            })
-        return normalized

@@ -67,13 +67,26 @@
                         <summary class="flex items-center justify-between gap-3 cursor-pointer list-none select-none py-2 px-3">
                             <div class="flex items-center gap-2 min-w-0">
                                 <svg class="w-3.5 h-3.5 flex-shrink-0 text-ink-300 group-open/step:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                                <span class="tw-timeline-title">{{ step.step_title or 'Reasoning step' }}</span>
+                                <span class="tw-timeline-title">{{ step.step_title }}</span>
                             </div>
-                            {% if step.timestamp %}<time class="tw-timeline-time" datetime="{{ step.timestamp }}">{{ step.timestamp }}</time>{% endif %}
+                            <div class="flex items-center gap-2 flex-shrink-0">
+                                {% set tool_badges = {
+                                    'run_nmap': 'badge-blue',
+                                    'send_http_request': 'badge-amber',
+                                    'run_fuzzer': 'badge-orange',
+                                    'execute_safe_poc': 'badge-red',
+                                    'generate_patch': 'badge-green',
+                                    'query_hackclub': 'badge-violet'
+                                } %}
+                                {% if step.tool %}
+                                <span class="badge {{ tool_badges.get(step.tool, 'badge-neutral') }} badge-mono">{{ step.tool }}</span>
+                                {% endif %}
+                                <span class="text-xs text-ink-400 tabular-nums">#{{ step.iteration }}</span>
+                            </div>
                         </summary>
                         {% if step.details %}
-                        <div class="px-3 pb-3 pt-0">
-                            <p class="tw-timeline-details ml-5.5 pl-px border-l border-white/10 pl-3">{{ step.details }}</p>
+                        <div class="px-3 pb-3 pt-1">
+                            <p class="tw-timeline-details">{{ step.details }}</p>
                         </div>
                         {% endif %}
                     </details>
@@ -83,17 +96,6 @@
         </div>
     </details>
 </section>
-<script>
-(function(){
-    document.querySelectorAll('#thoughtTimeline .tw-timeline-time').forEach(function(el){
-        var iso = el.getAttribute('datetime') || el.textContent;
-        var d = new Date(iso);
-        if (!isNaN(d.getTime())) {
-            el.textContent = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-        }
-    });
-})();
-</script>
 {% endif %}
 
 <!-- Severity & PDF Report -->

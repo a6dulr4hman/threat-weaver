@@ -813,31 +813,102 @@ class OrchestratorFSM:
             # Storage failure must not crash the analysis loop.
             pass
 
-    async def _generate_structured_thoughts(self) -> None:
+    def _build_thought_timeline(self) -> list[dict]:
         """
-        Format the agent's captured <think> reasoning into a linear thought
-        timeline and stash it on attack_graph["structured_thoughts"].
+        Build the structured thought timeline directly from tool_results.
 
-        Best-effort and offline-safe: returns immediately if no reasoning was
-        captured, uses its own LLMClient (so a mocked self.llm_client is never
-        disturbed), is bounded by a timeout, folds its token usage into the
-        running counter, and never raises.
+        Every tool call the agent made IS a reasoning step -- we already have
+        its reasoning (why), tool (what), arguments (how), and result (outcome).
+        This is deterministic, instant, free (no LLM call), and complete.
         """
-        agent = getattr(self, "_agent", None)
-        if agent is None or not getattr(agent, "raw_thoughts", None):
-            return
-        client = LLMClient()
-        thoughts: list = []
-        try:
-            thoughts = await asyncio.wait_for(
-                agent.format_thoughts(llm_client=client), timeout=120.0
-            )
-        except Exception:
-            thoughts = []
-        finally:
-            self._accumulate_usage(getattr(client, "last_usage", None))
-        if thoughts:
-            self.attack_graph["structured_thoughts"] = thoughts
+        tool_results = self.attack_graph.get("tool_results", [])
+        if not tool_results:
+            return []
+
+        steps = []
+        for entry in tool_results:
+            tool = entry.get("tool", "unknown")
+            args = entry.get("arguments", {})
+            reasoning = entry.get("reasoning", "")
+            result = entry.get("result", {})
+            iteration = entry.get("iteration", 0)
+
+            # Build a human-readable title from the tool + key argument
+            title = self._thought_title(tool, args)
+
+            # Build details: the agent's reasoning + a brief outcome summary
+            details_parts = []
+            if reasoning:
+                details_parts.append(reasoning)
+            outcome = self._thought_outcome(tool, args, result)
+            if outcome:
+                details_parts.append(f"\u2192 {outcome}")
+
+            steps.append({
+                "step_title": title,
+                "details": " ".join(details_parts) if details_parts else f"Executed {tool}",
+                "iteration": iteration,
+                "tool": tool,
+            })
+
+        return steps
+
+    @staticmethod
+    def _thought_title(tool: str, args: dict) -> str:
+        """Generate a concise human-readable title for a tool call."""
+        titles = {
+            "run_nmap": lambda a: f"Port scan {a.get('target', 'target')}",
+            "send_http_request": lambda a: f"{a.get('method', 'GET')} {a.get('endpoint', '')}",
+            "run_fuzzer": lambda a: f"Fuzz {a.get('endpoint', a.get('url', 'target'))}",
+            "execute_safe_poc": lambda a: f"PoC verification (sandbox {a.get('sandbox_id', '?')})",
+            "generate_patch": lambda a: f"Generate patch for {a.get('vuln_node', 'vulnerability')}",
+            "query_hackclub": lambda a: f"CVE lookup: {a.get('component', a.get('version', 'service'))}",
+        }
+        fn = titles.get(tool)
+        if fn:
+            return fn(args)
+        return f"Execute {tool}"
+
+    @staticmethod
+    def _thought_outcome(tool: str, args: dict, result: dict) -> str:
+        """Generate a brief outcome summary from a tool result."""
+        if not isinstance(result, dict):
+            return ""
+        if result.get("error"):
+            return f"Error: {str(result['error'])[:100]}"
+        if tool == "run_nmap":
+            services = result.get("results", [])
+            if services:
+                ports = [f"{s.get('port')}/{s.get('service','?')}" for s in services[:5]]
+                return f"Found {len(services)} open ports: {', '.join(ports)}"
+            return "No open ports found"
+        if tool == "send_http_request":
+            status = result.get("status_code", "?")
+            parts = [f"Status {status}"]
+            if result.get("is_server_error"):
+                parts.append("(server error)")
+            if result.get("server_crash_suspected"):
+                parts.append("(crash suspected)")
+            if result.get("stack_trace_detected"):
+                parts.append("(stack trace leaked)")
+            return " ".join(parts)
+        if tool == "execute_safe_poc":
+            if result.get("exploit_confirmed"):
+                return "Exploit CONFIRMED"
+            return f"Exploit not confirmed: {(result.get('match_detail') or '')[:80]}"
+        if tool == "generate_patch":
+            risk = result.get("risk_level", "")
+            desc = result.get("description", "")[:80]
+            return f"[{risk}] {desc}" if risk else desc
+        if tool == "query_hackclub":
+            refs = result.get("references", [])
+            vulns = result.get("vulnerable_components", [])
+            if vulns:
+                return f"Vulnerable: {', '.join(vulns[:3])}"
+            if refs:
+                return f"Found {len(refs)} references"
+            return "No known vulnerabilities found"
+        return ""
 
     async def _finalize_and_report(self) -> None:
         """
@@ -880,9 +951,9 @@ class OrchestratorFSM:
         severity = self._score_severity()
         self.attack_graph["overall_severity"] = severity
 
-        # Structure the K2-Think-v2 <think> reasoning stream into a linear thought
-        # timeline for the UI (best-effort, offline-safe — never blocks the report).
-        await self._generate_structured_thoughts()
+        # Build the structured thought timeline directly from tool_results.
+        # Each tool call is a "thought step" -- the agent's reasoning + what it did.
+        self.attack_graph["structured_thoughts"] = self._build_thought_timeline()
 
         # Persist severity onto the job row too.
         stmt = select(AnalysisJob).where(AnalysisJob.id == self.job_id)
