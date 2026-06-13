@@ -587,7 +587,12 @@
             // Track phase for reload-on-first-transition (pending→recon)
             const phase=job.pipeline_phase||job.status||'';const isComplete=job.status==='complete';
             if(phase!==lastPhase){
-                const wasWaiting=(lastPhase===''||lastPhase==='pending'||lastPhase==='ready');
+                // Reload the page ONCE on a genuine pending/ready -> running
+                // transition (so the server re-renders the live view). We must
+                // NOT treat the initial poll of an already-running scan
+                // (lastPhase==='') as a transition: lastPhase resets to '' on
+                // every page load, so doing so reloaded the page forever.
+                const wasWaiting=(lastPhase==='pending'||lastPhase==='ready');
                 const nowRunning=phase&&phase!=='pending'&&phase!=='ready';
                 if(wasWaiting&&nowRunning&&!isComplete){lastPhase=phase;window.location.reload();return;}
                 lastPhase=phase;

@@ -405,13 +405,19 @@ class OrchestratorFSM:
                     agent.feed_result(tool_name, result)
 
                     # --- Agentic self-correction ---------------------------
-                    # If the tool failed (timeout, invalid parameters, target
-                    # error, ...), feed the exception back to the model as a
-                    # corrective system directive so it can analyse the failure
-                    # and try alternative parameters. A strict MAX_RETRIES
-                    # counter on CONSECUTIVE failures prevents an infinite
-                    # self-correction loop; a successful call resets it.
-                    if isinstance(result, dict) and result.get("error"):
+                    # If the tool genuinely failed to EXECUTE (timeout, invalid
+                    # parameters, unreachable target, ...), feed the exception
+                    # back to the model as a corrective system directive so it
+                    # can analyse the failure and try alternative parameters. A
+                    # strict MAX_RETRIES counter on CONSECUTIVE failures prevents
+                    # an infinite self-correction loop; a successful call resets
+                    # it. IMPORTANT: a result that carries a finding/observation
+                    # signal (e.g. a payload that CRASHED the backend, which
+                    # surfaces as error="Request failed..." + server_crash_
+                    # suspected=true) is NOT a failure — it is a real finding and
+                    # must flow through normal anomaly handling below, or the
+                    # scan would discard its best results and abort early.
+                    if self._is_tool_failure(tool_name, result):
                         consecutive_tool_failures += 1
                         error_text = result.get("error")
                         self.attack_graph.setdefault("tool_failures", []).append({
@@ -638,13 +644,21 @@ class OrchestratorFSM:
         live" while the stepper showed "Complete").
         """
         state_chain = [
-            FSMState.RECON, FSMState.DAST_TESTING,
+            FSMState.READY, FSMState.RECON, FSMState.DAST_TESTING,
             FSMState.POC_VERIFICATION, FSMState.BLUE_TEAM_REMEDIATION,
             FSMState.COMPLETE,
         ]
-        for next_state in state_chain:
-            if self.state == next_state:
-                continue
+        # Advance ONLY forward from wherever we are now. Starting the walk at the
+        # state *after* the current one avoids attempting an invalid backward
+        # transition (e.g. DAST_TESTING -> RECON), which previously broke the
+        # loop on the first step and left a finished job stuck at a running
+        # status (report generated, but status never reached "complete" — the
+        # "shows the report but still says scanning live" bug).
+        try:
+            start = state_chain.index(self.state) + 1
+        except ValueError:
+            start = 0  # current state not in the chain — walk from the beginning
+        for next_state in state_chain[start:]:
             if not self.transition(next_state):
                 break
         # pipeline_phase is intentionally NOT set to COMPLETE here.
@@ -904,6 +918,44 @@ class OrchestratorFSM:
         # Only now is the job truly finished — stamp pipeline_phase so the
         # UI stepper advances to "Complete" only once the report exists.
         self.pipeline_phase = FSMState.COMPLETE
+
+    # Tools whose "error" results must NOT count as hard execution failures.
+    # query_hackclub is best-effort CVE enrichment (commonly unconfigured), and
+    # execute_safe_poc is bounded by its own attempt budget — letting either
+    # abort the whole scan via the self-correction counter would be wrong.
+    _SELF_CORRECTION_EXEMPT_TOOLS = {"query_hackclub", "execute_safe_poc"}
+
+    @classmethod
+    def _is_tool_failure(cls, tool_name: str, result: dict) -> bool:
+        """
+        Did a tool genuinely FAIL TO EXECUTE (vs. successfully return data)?
+
+        Only a true execution failure should drive self-correction / the abort
+        counter. A result that carries ANY observation or finding signal means
+        the tool ran fine and returned usable data — most importantly a payload
+        that CRASHED the backend comes back as error="Request failed..." together
+        with server_crash_suspected/is_server_error=true, which is a real finding,
+        not a failure. Misclassifying those was discarding the scan's best
+        findings and aborting after three of them.
+        """
+        if not isinstance(result, dict) or not result.get("error"):
+            return False
+        if tool_name in cls._SELF_CORRECTION_EXEMPT_TOOLS:
+            return False
+        # Any of these signals => the tool produced a usable observation/finding.
+        if (
+            result.get("status_code")
+            or result.get("is_server_error")
+            or result.get("server_crash_suspected")
+            or result.get("stack_trace_detected")
+            or result.get("anomalies_found")
+            or result.get("exploit_confirmed")
+            or result.get("results")
+            or result.get("references")
+            or result.get("body")
+        ):
+            return False
+        return True
 
     def _maybe_advance_state(self, tool_name: str) -> None:
         """Advance FSM state by one step based on tool used."""
