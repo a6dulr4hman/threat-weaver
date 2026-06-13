@@ -30,6 +30,47 @@ MAX_ATTACK_ATTEMPTS = 6
 # therefore subject to the per-endpoint budget above.
 ATTACK_TOOLS = {"send_http_request", "run_fuzzer"}
 
+# Path segments that look dynamic (a numeric id) or injected (carry SQL/command
+# metacharacters) are collapsed to "<id>" so that /customer/1, /customer/2',
+# /customer/3'-- are all recognised as the SAME route. This stops the agent from
+# re-probing every id variant and stops the SAME vulnerability being reported
+# once per payload (the "found SQLi 7 times on /customer/N'" bug).
+_DYNAMIC_SEG_CHARS = set("'\";()<>%|&{}*` \t")
+
+
+def _is_dynamic_segment(seg: str) -> bool:
+    """True when a URL path segment is a numeric id or carries injection chars."""
+    if not seg:
+        return False
+    if seg == "<id>":
+        return True
+    if seg[0].isdigit():
+        return True
+    if "--" in seg:
+        return True
+    return any(c in _DYNAMIC_SEG_CHARS for c in seg)
+
+
+def templatize_path(path: str) -> str:
+    """Collapse dynamic/injected segments of a bare path to '<id>'."""
+    return "/".join("<id>" if _is_dynamic_segment(s) else s for s in path.split("/"))
+
+
+def templatize_url(url: str) -> str:
+    """
+    Collapse a full URL (or bare path) to a route template by replacing dynamic
+    path segments with '<id>'. Query string and fragment are dropped. Used to
+    give every id/payload variant of one route a SINGLE identity.
+    """
+    base = (url or "").split("?", 1)[0].split("#", 1)[0]
+    if "://" in base:
+        proto, _, rest = base.partition("://")
+        host, slash, path = rest.partition("/")
+        if not slash:
+            return f"{proto}://{host}".rstrip("/")
+        return (f"{proto}://{host}/" + templatize_path(path)).rstrip("/")
+    return templatize_path(base).rstrip("/") or "/"
+
 # Source-derived routes that are never worth attacking: the root redirect,
 # logout (which just clears the session), and the ThreatWeaver ownership-
 # verification endpoint. They are excluded from the coverage checklist so the
@@ -1014,8 +1055,10 @@ class OrchestratorFSM:
         raw = arguments.get("endpoint") or arguments.get("url") or ""
         if not raw:
             return None
-        # Normalise: drop query/fragment so ?a=1 and ?a=2 share a budget.
-        return raw.split("?", 1)[0].split("#", 1)[0].rstrip("/") or raw
+        # Normalise: drop query/fragment AND collapse dynamic path segments so
+        # /customer/1', /customer/2', /customer/3'-- all share ONE budget and
+        # identity (instead of being treated as distinct endpoints).
+        return templatize_url(raw) or raw.split("?", 1)[0].rstrip("/") or raw
 
     @staticmethod
     def _result_is_anomaly(result: dict) -> bool:
@@ -1399,11 +1442,11 @@ class OrchestratorFSM:
     def _coverage_template(path: str) -> str:
         """
         Collapse a path to a coverage 'template' so that distinct concrete URLs
-        of the same endpoint (e.g. /customer/1 and /customer/2) count as ONE
-        endpoint. Numeric segments become <id>; query strings are dropped.
+        of the same endpoint (e.g. /customer/1 and /customer/2') count as ONE
+        endpoint. Dynamic / injected segments become <id>; query strings dropped.
         """
         p = (path or "/").split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
-        segs = ["<id>" if seg.isdigit() else seg for seg in p.split("/")]
+        segs = ["<id>" if _is_dynamic_segment(seg) else seg for seg in p.split("/")]
         return "/".join(segs) or "/"
 
     def _coverage_remaining(self) -> list[str]:

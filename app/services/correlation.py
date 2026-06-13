@@ -149,6 +149,26 @@ def _norm_path(raw: str) -> str:
     return s.rstrip("/") or "/"
 
 
+# Path segments carrying a numeric id or injection metacharacters, collapsed so
+# /customer/1, /customer/2', /customer/3'-- all map to ONE canonical route — the
+# fix for the same vulnerability being reported once per payload variant.
+_DYNAMIC_SEG_CHARS = set("'\";()<>%|&{}*` \t")
+
+
+def _is_dynamic_segment(seg: str) -> bool:
+    if not seg:
+        return False
+    if seg == "<id>" or seg[0].isdigit() or "--" in seg:
+        return True
+    return any(c in _DYNAMIC_SEG_CHARS for c in seg)
+
+
+def _canonical_path(raw: str) -> str:
+    """``_norm_path`` + collapse dynamic/injected segments to ``<id>``."""
+    path = _norm_path(raw)
+    return "/".join("<id>" if _is_dynamic_segment(s) else s for s in path.split("/")) or "/"
+
+
 def _path_tokens(path: str) -> set[str]:
     """Distinctive lowercase tokens of a path, for fuzzy text matching."""
     return {t for t in re.split(r"[^a-z0-9]+", path.lower()) if len(t) >= 3}
@@ -255,7 +275,7 @@ def correlate(attack_graph: dict | None) -> dict:
             label = classify(tool, args, result)
             if not label:
                 continue
-            endpoint_path = _norm_path(args.get("endpoint") or args.get("url") or "/")
+            endpoint_path = _canonical_path(args.get("endpoint") or args.get("url") or "/")
             method = args.get("method") or ("FUZZ" if tool == "run_fuzzer" else "GET")
             meta = _category_meta(label)
             _ensure_detection(

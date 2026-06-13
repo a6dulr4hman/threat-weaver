@@ -35,6 +35,12 @@ class MCPClient:
         try:
             proc = await asyncio.create_subprocess_exec(
                 "nmap",
+                "-Pn",  # skip host discovery: ICMP/ping is blocked in many
+                        # container/PaaS networks (e.g. Coolify), which made
+                        # nmap conclude the host was DOWN and return 0 ports.
+                "-sT",  # TCP connect scan — works WITHOUT root / CAP_NET_RAW,
+                        # which a non-root container app does not have (the
+                        # default SYN scan silently found nothing there).
                 "-sV",
                 "--version-light",  # lighter probes -> faster service detection
                 "-T4",  # more aggressive timing template
