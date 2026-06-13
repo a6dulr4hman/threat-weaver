@@ -44,33 +44,46 @@
     </div>
 </div>
 
-<!-- Structured Thought Timeline (K2-Think-v2) -->
+<!-- K2 Thought Process (collapsible) -->
 {% set thoughts = job.structured_thoughts or (job.attack_graph_data.structured_thoughts if job.attack_graph_data else None) %}
 {% if thoughts %}
 <section class="card card-pad mb-6">
-    <h2 class="section-title mb-1 flex items-center gap-2">
-        <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        K2-Think-v2 reasoning timeline
-    </h2>
-    <p class="text-xs text-ink-400 mb-5">A linear, top-to-bottom view of the model's raw chain-of-thought, structured into discrete steps.</p>
-    <ol class="tw-timeline" id="thoughtTimeline">
-        {% for step in thoughts %}
-        <li class="tw-timeline-item">
-            <span class="tw-timeline-node" aria-hidden="true"></span>
-            <div class="tw-timeline-card">
-                <div class="tw-timeline-head">
-                    <span class="tw-timeline-title">{{ step.step_title or 'Reasoning step' }}</span>
-                    {% if step.timestamp %}<time class="tw-timeline-time" datetime="{{ step.timestamp }}">{{ step.timestamp }}</time>{% endif %}
-                </div>
-                {% if step.details %}<p class="tw-timeline-details">{{ step.details }}</p>{% endif %}
-            </div>
-        </li>
-        {% endfor %}
-    </ol>
+    <details class="group" id="thoughtProcessSection">
+        <summary class="flex items-center gap-3 cursor-pointer list-none select-none">
+            <svg class="w-4 h-4 text-ink-200 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <h2 class="section-title flex items-center gap-2">
+                <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                K2 thought process
+            </h2>
+            <span class="badge badge-neutral">{{ thoughts | length }} step{{ 's' if thoughts | length != 1 else '' }}</span>
+        </summary>
+
+        <div class="mt-5 ml-1">
+            <ol class="tw-timeline" id="thoughtTimeline">
+                {% for step in thoughts %}
+                <li class="tw-timeline-item">
+                    <span class="tw-timeline-node" aria-hidden="true"></span>
+                    <details class="tw-timeline-card group/step">
+                        <summary class="flex items-center justify-between gap-3 cursor-pointer list-none select-none py-2 px-3">
+                            <div class="flex items-center gap-2 min-w-0">
+                                <svg class="w-3.5 h-3.5 flex-shrink-0 text-ink-300 group-open/step:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                                <span class="tw-timeline-title">{{ step.step_title or 'Reasoning step' }}</span>
+                            </div>
+                            {% if step.timestamp %}<time class="tw-timeline-time" datetime="{{ step.timestamp }}">{{ step.timestamp }}</time>{% endif %}
+                        </summary>
+                        {% if step.details %}
+                        <div class="px-3 pb-3 pt-0">
+                            <p class="tw-timeline-details ml-5.5 pl-px border-l border-white/10 pl-3">{{ step.details }}</p>
+                        </div>
+                        {% endif %}
+                    </details>
+                </li>
+                {% endfor %}
+            </ol>
+        </div>
+    </details>
 </section>
 <script>
-// Prettify ISO timestamps in the thought timeline to a readable local time,
-// leaving the original text untouched when it isn't a parseable date.
 (function(){
     document.querySelectorAll('#thoughtTimeline .tw-timeline-time').forEach(function(el){
         var iso = el.getAttribute('datetime') || el.textContent;
