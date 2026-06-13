@@ -14,6 +14,7 @@ from typing import Dict, Any
 from app.services.llm_client import LLMClient
 from app.services.llm_json import (
     extract_json_object,
+    extract_think_block,
     is_api_error,
 )
 
@@ -211,6 +212,10 @@ class K2Agent:
     def __init__(self, llm_client: LLMClient | None = None):
         self.llm_client = llm_client or LLMClient()
         self.conversation_history: list[Dict[str, Any]] = []
+        # Captured chain-of-thought, one entry per K2 decision. Each entry pairs
+        # the model's raw <think>...</think> reasoning with the action it led to,
+        # so the UI can render the agent's ACTUAL thinking (not a tool summary).
+        self.thinking_log: list[Dict[str, Any]] = []
 
     def build_state_message(self, context: Dict[str, Any]) -> str:
         """
@@ -346,6 +351,22 @@ class K2Agent:
         if len(self.conversation_history) > MAX_HISTORY_MESSAGES:
             self.conversation_history = self.conversation_history[-MAX_HISTORY_MESSAGES:]
 
+        # Capture this turn's RAW <think> reasoning, paired with the action it
+        # produced. This is the model's actual chain-of-thought (extracted from
+        # the <think>...</think> block) — surfaced verbatim in the UI's "K2
+        # thought process". Falls back to the decision's one-line reasoning when
+        # the model emitted no think block. No extra LLM call is made.
+        think = extract_think_block(final_response)
+        self.thinking_log.append({
+            "iteration": context.get("iteration"),
+            "phase": context.get("phase"),
+            "think": think,
+            "action": decision.get("action", ""),
+            "tool": decision.get("tool", ""),
+            "arguments": decision.get("arguments", {}),
+            "reasoning": decision.get("reasoning") or decision.get("summary") or "",
+        })
+
         return decision
 
     def feed_result(self, tool_name: str, result: Dict[str, Any]) -> None:
@@ -363,22 +384,6 @@ class K2Agent:
         self.conversation_history.append({
             "role": "user",
             "content": f"[ORCHESTRATOR] {note}",
-        })
-
-    def feed_system(self, content: str) -> None:
-        """
-        Inject a system-role directive into the conversation history.
-
-        Used for agentic self-correction: when a tool execution fails, the raw
-        Python exception is formatted into a corrective system prompt and fed
-        back so the model can analyse the failure and propose alternative
-        parameters. The main SYSTEM_PROMPT is re-prepended fresh on every
-        decide() call, so adding system messages here is safe even after the
-        rolling-window truncation.
-        """
-        self.conversation_history.append({
-            "role": "system",
-            "content": content,
         })
 
     @staticmethod

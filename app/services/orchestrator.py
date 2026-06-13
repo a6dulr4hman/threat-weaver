@@ -38,14 +38,6 @@ SKIP_ROUTE_PATHS = {"/", "/logout", "/threatweaver.txt"}
 # Set to 7 to match the number of vulnerabilities in the Nimbus CRM demo target.
 MAX_PATCHES = 7
 
-# Agentic self-correction guardrail: the maximum number of CONSECUTIVE tool
-# execution failures the agent may hit before the orchestrator aborts the loop.
-# On each failure the Python exception is fed back to the model as a corrective
-# system directive so it can analyse the failure and propose alternative
-# parameters; after MAX_RETRIES straight failures we stop to prevent an infinite
-# self-correction loop (a counter is reset to 0 by the next successful tool call).
-MAX_RETRIES = 3
-
 # Hard wall-clock budget for a single run_cycle, in seconds.
 # With K2's 30 rpm cap and 120s per-call timeout, 20 iterations realistically
 # takes 2-5 minutes. Setting this to 5 minutes gives headroom while preventing
@@ -247,9 +239,6 @@ class OrchestratorFSM:
         )
 
         deadline = time.monotonic() + self.cycle_budget_seconds
-        # Agentic self-correction: count consecutive tool failures so we can
-        # feed the exception back to the model and abort after MAX_RETRIES.
-        consecutive_tool_failures = 0
         try:
             for iteration in range(MAX_ITERATIONS):
                 # Wall-clock guardrail: a slow reasoning model (30 rpm, 120s per
@@ -283,6 +272,11 @@ class OrchestratorFSM:
 
                 # Accumulate K2-Think-v2 token usage from this reasoning call.
                 self._accumulate_usage(getattr(self.llm_client, "last_usage", None))
+
+                # Mirror the agent's captured chain-of-thought (the raw <think>
+                # reasoning for each decision) into the attack graph so it is
+                # persisted and available to render the UI thought timeline.
+                self.attack_graph["thinking_log"] = agent.thinking_log
 
                 action = decision.get("action")
 
@@ -378,14 +372,7 @@ class OrchestratorFSM:
                             await self.save_state()
                             continue
 
-                    # Wrap tool execution so an unexpected exception (the
-                    # ToolExecutor already catches most, but defence in depth)
-                    # never aborts the loop silently — it becomes a structured
-                    # error result the self-correction logic can act on.
-                    try:
-                        result = await executor.execute(tool_name, arguments)
-                    except Exception as exc:  # pragma: no cover - executor guards
-                        result = {"error": f"Tool execution failed: {exc}"}
+                    result = await executor.execute(tool_name, arguments)
                     # generate_patch invokes K2-Think-v2 inside the executor
                     # (via RemediationService, which shares self.llm_client), so
                     # capture those tokens too — they were previously lost.
@@ -403,48 +390,6 @@ class OrchestratorFSM:
                     })
                     # Feed result back to K2
                     agent.feed_result(tool_name, result)
-
-                    # --- Agentic self-correction ---------------------------
-                    # If the tool genuinely failed to EXECUTE (timeout, invalid
-                    # parameters, unreachable target, ...), feed the exception
-                    # back to the model as a corrective system directive so it
-                    # can analyse the failure and try alternative parameters. A
-                    # strict MAX_RETRIES counter on CONSECUTIVE failures prevents
-                    # an infinite self-correction loop; a successful call resets
-                    # it. IMPORTANT: a result that carries a finding/observation
-                    # signal (e.g. a payload that CRASHED the backend, which
-                    # surfaces as error="Request failed..." + server_crash_
-                    # suspected=true) is NOT a failure — it is a real finding and
-                    # must flow through normal anomaly handling below, or the
-                    # scan would discard its best results and abort early.
-                    if self._is_tool_failure(tool_name, result):
-                        consecutive_tool_failures += 1
-                        error_text = result.get("error")
-                        self.attack_graph.setdefault("tool_failures", []).append({
-                            "iteration": iteration,
-                            "tool": tool_name,
-                            "arguments": arguments,
-                            "error": error_text,
-                            "retry": consecutive_tool_failures,
-                        })
-                        agent.feed_system(
-                            f"Tool execution failed: {error_text}. Analyze the "
-                            "failure and provide alternative parameters."
-                        )
-                        if consecutive_tool_failures >= MAX_RETRIES:
-                            self.attack_graph["stopped_reason"] = (
-                                f"Aborted after {MAX_RETRIES} consecutive tool "
-                                "failures (self-correction limit reached)."
-                            )
-                            await self.save_state()
-                            break
-                        # Don't advance FSM state or budgets on a failed tool;
-                        # let the model retry with corrected parameters.
-                        await self.save_state()
-                        continue
-                    else:
-                        # A successful tool call clears the failure streak.
-                        consecutive_tool_failures = 0
 
                     # Record a successfully patched node (dedup + budget above)
                     # and persist the full structured finding to the mitigations
@@ -815,40 +760,48 @@ class OrchestratorFSM:
 
     def _build_thought_timeline(self) -> list[dict]:
         """
-        Build the structured thought timeline directly from tool_results.
+        Build the K2 thought-process timeline from the agent's captured
+        chain-of-thought (the raw <think>...</think> reasoning of every K2
+        decision), NOT from the tool results.
 
-        Every tool call the agent made IS a reasoning step -- we already have
-        its reasoning (why), tool (what), arguments (how), and result (outcome).
-        This is deterministic, instant, free (no LLM call), and complete.
+        Each entry surfaces the model's ACTUAL deliberation verbatim, paired
+        with the action that thinking produced. This is deterministic, instant,
+        and uses no extra LLM call — the reasoning was already captured during
+        the agent loop.
         """
-        tool_results = self.attack_graph.get("tool_results", [])
-        if not tool_results:
+        log = self.attack_graph.get("thinking_log") or []
+        if not log:
             return []
 
-        steps = []
-        for entry in tool_results:
-            tool = entry.get("tool", "unknown")
-            args = entry.get("arguments", {})
-            reasoning = entry.get("reasoning", "")
-            result = entry.get("result", {})
-            iteration = entry.get("iteration", 0)
+        steps: list[dict] = []
+        for i, entry in enumerate(log):
+            tool = entry.get("tool") or ""
+            action = entry.get("action") or ""
+            args = entry.get("arguments") or {}
 
-            # Build a human-readable title from the tool + key argument
-            title = self._thought_title(tool, args)
+            # Title: what this thinking decided to do.
+            if tool:
+                title = self._thought_title(tool, args)
+            elif action == "complete":
+                title = "Concluded the analysis"
+            elif action == "error":
+                title = "Recovering from an unparsable response"
+            else:
+                title = f"Reasoning step {i + 1}"
 
-            # Build details: the agent's reasoning + a brief outcome summary
-            details_parts = []
-            if reasoning:
-                details_parts.append(reasoning)
-            outcome = self._thought_outcome(tool, args, result)
-            if outcome:
-                details_parts.append(f"\u2192 {outcome}")
+            # Details: the model's RAW chain-of-thought. Fall back to the
+            # one-line decision reasoning only when no <think> block was emitted.
+            think = (entry.get("think") or "").strip()
+            reasoning = (entry.get("reasoning") or "").strip()
+            details = think or reasoning or f"Decided to {action or 'act'}."
 
             steps.append({
                 "step_title": title,
-                "details": " ".join(details_parts) if details_parts else f"Executed {tool}",
-                "iteration": iteration,
-                "tool": tool,
+                "details": details,
+                "iteration": entry.get("iteration", i),
+                "tool": tool or action,
+                # True when we have genuine model reasoning (vs. a fallback line).
+                "has_reasoning": bool(think),
             })
 
         return steps
@@ -868,47 +821,6 @@ class OrchestratorFSM:
         if fn:
             return fn(args)
         return f"Execute {tool}"
-
-    @staticmethod
-    def _thought_outcome(tool: str, args: dict, result: dict) -> str:
-        """Generate a brief outcome summary from a tool result."""
-        if not isinstance(result, dict):
-            return ""
-        if result.get("error"):
-            return f"Error: {str(result['error'])[:100]}"
-        if tool == "run_nmap":
-            services = result.get("results", [])
-            if services:
-                ports = [f"{s.get('port')}/{s.get('service','?')}" for s in services[:5]]
-                return f"Found {len(services)} open ports: {', '.join(ports)}"
-            return "No open ports found"
-        if tool == "send_http_request":
-            status = result.get("status_code", "?")
-            parts = [f"Status {status}"]
-            if result.get("is_server_error"):
-                parts.append("(server error)")
-            if result.get("server_crash_suspected"):
-                parts.append("(crash suspected)")
-            if result.get("stack_trace_detected"):
-                parts.append("(stack trace leaked)")
-            return " ".join(parts)
-        if tool == "execute_safe_poc":
-            if result.get("exploit_confirmed"):
-                return "Exploit CONFIRMED"
-            return f"Exploit not confirmed: {(result.get('match_detail') or '')[:80]}"
-        if tool == "generate_patch":
-            risk = result.get("risk_level", "")
-            desc = result.get("description", "")[:80]
-            return f"[{risk}] {desc}" if risk else desc
-        if tool == "query_hackclub":
-            refs = result.get("references", [])
-            vulns = result.get("vulnerable_components", [])
-            if vulns:
-                return f"Vulnerable: {', '.join(vulns[:3])}"
-            if refs:
-                return f"Found {len(refs)} references"
-            return "No known vulnerabilities found"
-        return ""
 
     async def _finalize_and_report(self) -> None:
         """
@@ -989,44 +901,6 @@ class OrchestratorFSM:
         # Only now is the job truly finished — stamp pipeline_phase so the
         # UI stepper advances to "Complete" only once the report exists.
         self.pipeline_phase = FSMState.COMPLETE
-
-    # Tools whose "error" results must NOT count as hard execution failures.
-    # query_hackclub is best-effort CVE enrichment (commonly unconfigured), and
-    # execute_safe_poc is bounded by its own attempt budget — letting either
-    # abort the whole scan via the self-correction counter would be wrong.
-    _SELF_CORRECTION_EXEMPT_TOOLS = {"query_hackclub", "execute_safe_poc"}
-
-    @classmethod
-    def _is_tool_failure(cls, tool_name: str, result: dict) -> bool:
-        """
-        Did a tool genuinely FAIL TO EXECUTE (vs. successfully return data)?
-
-        Only a true execution failure should drive self-correction / the abort
-        counter. A result that carries ANY observation or finding signal means
-        the tool ran fine and returned usable data — most importantly a payload
-        that CRASHED the backend comes back as error="Request failed..." together
-        with server_crash_suspected/is_server_error=true, which is a real finding,
-        not a failure. Misclassifying those was discarding the scan's best
-        findings and aborting after three of them.
-        """
-        if not isinstance(result, dict) or not result.get("error"):
-            return False
-        if tool_name in cls._SELF_CORRECTION_EXEMPT_TOOLS:
-            return False
-        # Any of these signals => the tool produced a usable observation/finding.
-        if (
-            result.get("status_code")
-            or result.get("is_server_error")
-            or result.get("server_crash_suspected")
-            or result.get("stack_trace_detected")
-            or result.get("anomalies_found")
-            or result.get("exploit_confirmed")
-            or result.get("results")
-            or result.get("references")
-            or result.get("body")
-        ):
-            return False
-        return True
 
     def _maybe_advance_state(self, tool_name: str) -> None:
         """Advance FSM state by one step based on tool used."""

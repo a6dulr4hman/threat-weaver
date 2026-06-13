@@ -530,4 +530,10 @@ main > *:nth-child(9)  { animation-delay: 0.32s; }
     padding-left: 1.4rem;
     border-left: 1px solid rgba(255, 255, 255, 0.08);
     margin-left: 0.25rem;
+    /* The raw <think> reasoning is multi-line prose — preserve its formatting
+       and cap very long chains-of-thought with a scrollbar. */
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 22rem;
+    overflow-y: auto;
 }
