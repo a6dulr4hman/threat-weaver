@@ -523,7 +523,7 @@ async def test_orchestrator_agentic_loop_max_iterations(db_session):
 
 
 async def test_orchestrator_error_breaks_loop(db_session):
-    """Orchestrator loop stops on K2 parse error."""
+    """A K2 parse error is tolerated and retried, then the loop stops."""
     workspace_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
 
@@ -558,10 +558,13 @@ async def test_orchestrator_error_breaks_loop(db_session):
     # Should have stopped with an error recorded
     assert "k2_error" in fsm.attack_graph
     assert "Could not parse" in fsm.attack_graph["k2_error"]
-    # The agent retries before giving up, so chat is called once per attempt
-    # (initial + MAX_PARSE_RETRIES). The orchestrator loop still breaks once.
+    # A parse error no longer ends the scan immediately: the orchestrator feeds a
+    # correction and retries, giving up only after MAX_PARSE_ERROR_RETRIES
+    # CONSECUTIVE unparsable replies. Each decide() makes (MAX_PARSE_RETRIES + 1)
+    # chat calls internally.
     from app.services.k2_agent import MAX_PARSE_RETRIES
-    assert mock_llm.chat.call_count == MAX_PARSE_RETRIES + 1
+    from app.services.orchestrator import MAX_PARSE_ERROR_RETRIES
+    assert mock_llm.chat.call_count == MAX_PARSE_ERROR_RETRIES * (MAX_PARSE_RETRIES + 1)
 
 
 async def test_orchestrator_complete_state_noop(db_session):
@@ -704,16 +707,17 @@ def test_result_is_anomaly_signals():
     assert fsm._result_is_anomaly({"status_code": 200}) is False
 
 
-def test_record_attempt_exhausts_after_three():
-    """Three non-anomalous attempts mark the endpoint exhausted."""
+def test_record_attempt_exhausts_after_budget():
+    """Non-anomalous attempts mark the endpoint exhausted once the budget is hit."""
+    from app.services.orchestrator import MAX_ATTACK_ATTEMPTS
     fsm = _make_fsm()
     ep = "http://t/login"
 
-    assert fsm._record_attempt(ep, was_anomaly=False) is not None  # attempt 1
-    assert not fsm._is_endpoint_exhausted(ep)
-    fsm._record_attempt(ep, was_anomaly=False)  # attempt 2
-    assert not fsm._is_endpoint_exhausted(ep)
-    note = fsm._record_attempt(ep, was_anomaly=False)  # attempt 3 -> exhausted
+    note = None
+    for i in range(MAX_ATTACK_ATTEMPTS):
+        note = fsm._record_attempt(ep, was_anomaly=False)
+        if i < MAX_ATTACK_ATTEMPTS - 1:
+            assert not fsm._is_endpoint_exhausted(ep)
     assert fsm._is_endpoint_exhausted(ep)
     assert "exhausted" in note.lower()
 
@@ -735,9 +739,10 @@ def test_record_attempt_anomaly_resets_counter():
 async def test_orchestrator_blocks_exhausted_endpoint(db_session):
     """
     Once an endpoint is exhausted, further attacks on it are blocked (no real
-    request) and the agent is nudged to move on. After 3 failed attempts the
-    4th is blocked, so the executor runs exactly 3 times.
+    request) and the agent is nudged to move on. After MAX_ATTACK_ATTEMPTS failed
+    attempts the next one is blocked, so the executor runs exactly that many times.
     """
+    from app.services.orchestrator import MAX_ATTACK_ATTEMPTS
     workspace_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
 
@@ -774,12 +779,12 @@ async def test_orchestrator_blocks_exhausted_endpoint(db_session):
     fsm.llm_client = mock_llm
     fsm.mcp_client = mock_mcp
 
-    with patch("app.services.k2_agent.MAX_ITERATIONS", 6):
+    with patch("app.services.k2_agent.MAX_ITERATIONS", MAX_ATTACK_ATTEMPTS + 3):
         await fsm.run_cycle()
 
-    # Executor should run only MAX_ATTACK_ATTEMPTS (3) times; later iterations
+    # Executor should run only MAX_ATTACK_ATTEMPTS times; later iterations
     # are blocked before reaching the network.
-    assert mock_mcp.send_http_request.call_count == 3
+    assert mock_mcp.send_http_request.call_count == MAX_ATTACK_ATTEMPTS
     assert "http://target.com/login" in fsm.attack_graph.get("exhausted_endpoints", [])
     assert fsm.attack_graph.get("guardrail_notes")
 

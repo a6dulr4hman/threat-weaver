@@ -21,7 +21,10 @@ from app.services.mcp_client import MCPClient
 # fire at a single endpoint before the orchestrator forces it to move on. This
 # bounds the loop so a stubborn route can't burn the 60k token budget or the
 # 120s gateway timeout. Stored alongside FSM state in SQLite (attack_graph).
-MAX_ATTACK_ATTEMPTS = 3
+# Set high enough that the agent can try several DISTINCT payload classes on one
+# endpoint (bare-quote SQLi, boolean SQLi, command injection, path traversal,
+# time-based blind) before the route is considered exhausted.
+MAX_ATTACK_ATTEMPTS = 6
 
 # Tools that constitute an "attack attempt" against a specific endpoint and are
 # therefore subject to the per-endpoint budget above.
@@ -46,6 +49,12 @@ MAX_PATCHES = 12
 # coverage (and full vulnerability detection). MAX_ITERATIONS is the hard
 # backstop; this just prevents a stubborn agent from looping on "complete".
 COMPLETION_DEFERRAL_CAP = 15
+
+# How many CONSECUTIVE unparsable K2 responses to tolerate before giving up. A
+# single non-JSON reply must NOT end the whole scan (it previously did, cutting
+# scans short before they had covered every endpoint) — we feed a correction and
+# let the agent recover and keep probing. Reset to 0 by any valid decision.
+MAX_PARSE_ERROR_RETRIES = 4
 
 # Hard wall-clock budget for a single run_cycle, in seconds.
 # K2's 30 rpm cap + 120s per-call timeout means a thorough scan that probes the
@@ -249,6 +258,8 @@ class OrchestratorFSM:
         )
 
         deadline = time.monotonic() + self.cycle_budget_seconds
+        # Tolerate a few unparsable K2 replies without ending the scan.
+        consecutive_parse_errors = 0
         try:
             for iteration in range(MAX_ITERATIONS):
                 # Wall-clock guardrail: a slow reasoning model (30 rpm, 120s per
@@ -289,6 +300,8 @@ class OrchestratorFSM:
                 self.attack_graph["thinking_log"] = agent.thinking_log
 
                 action = decision.get("action")
+                if action in ("complete", "tool_call"):
+                    consecutive_parse_errors = 0
 
                 if action == "complete":
                     # Coverage gate: do NOT let the agent stop while it still has
@@ -547,12 +560,31 @@ class OrchestratorFSM:
                     # Checkpoint after each tool execution to prevent data loss
                     await self.save_state()
                 elif action == "error":
-                    # K2 response couldn't be parsed - break to avoid an
-                    # infinite loop.
+                    # A single unparsable reply must NOT end the scan. Feed a
+                    # correction and let the agent recover on the next turn; only
+                    # give up after several CONSECUTIVE parse failures. (This
+                    # used to break immediately, ending scans early — before the
+                    # whole attack surface had been probed.)
+                    consecutive_parse_errors += 1
                     self.attack_graph["k2_error"] = decision.get(
                         "detail", "Unknown error"
                     )
-                    break
+                    if consecutive_parse_errors >= MAX_PARSE_ERROR_RETRIES:
+                        self.attack_graph["stopped_reason"] = (
+                            f"Aborted after {MAX_PARSE_ERROR_RETRIES} consecutive "
+                            "unparsable K2 responses."
+                        )
+                        break
+                    agent.feed_note(
+                        "Your previous reply was not valid JSON and could not be "
+                        "parsed. Reply with EXACTLY ONE JSON object for your next "
+                        'action ({"action": "tool_call", ...} or '
+                        '{"action": "complete", ...}) and nothing else — no prose '
+                        "and no markdown fences. Then continue the assessment by "
+                        "probing the next unprobed endpoint or payload."
+                    )
+                    await self.save_state()
+                    continue
                 else:
                     # Unknown action type
                     break
@@ -1047,6 +1079,48 @@ class OrchestratorFSM:
             return True
         return False
 
+    # SQL engine error signatures that leak when an injected quote breaks a
+    # query — strong evidence of (error-based) SQL injection.
+    _SQL_ERROR_MARKERS = (
+        "sqlite3.operationalerror", "operationalerror", "unrecognized token",
+        "unterminated quoted string", "near \"", "sql syntax",
+        "you have an error in your sql syntax", "sqlalchemy.exc",
+        "programmingerror", "psycopg2", "pg_query", "mysql_fetch",
+        "warning: mysql", "ora-0", "odbc sql",
+    )
+
+    @classmethod
+    def _looks_like_sql_error(cls, body: str) -> bool:
+        """Response leaked a SQL engine error => error-based SQL injection."""
+        if not body:
+            return False
+        low = body.lower()
+        return any(marker in low for marker in cls._SQL_ERROR_MARKERS)
+
+    @staticmethod
+    def _looks_like_blind_cmd_timing(arguments: dict, result: dict) -> bool:
+        """
+        Blind OS command injection confirmed by TIMING: a payload that injects a
+        `sleep N` and a response time that actually reflects that N-second delay.
+
+        This catches command injection on endpoints that never echo the command
+        output back (e.g. a backup job that just returns "started"), which the
+        output-based detector above cannot see.
+        """
+        if not isinstance(result, dict):
+            return False
+        blob = json.dumps(arguments or {}, default=str).lower()
+        match = re.search(r"sleep\s+(\d+)", blob)
+        if not match:
+            return False
+        delay = int(match.group(1))
+        if delay < 2:  # a 0/1s delay proves nothing against normal latency
+            return False
+        rt = result.get("response_time_ms") or 0
+        # Confirm if the response took at least ~70% of the injected delay
+        # (command + network overhead only ever ADDS time).
+        return rt >= delay * 1000 * 0.7
+
     @classmethod
     def _looks_like_auth_bypass(cls, arguments: dict, result: dict) -> bool:
         """
@@ -1106,6 +1180,10 @@ class OrchestratorFSM:
             return "sensitive_file_disclosure"
         if self._looks_like_command_output(body):
             return "os_command_execution"
+        if self._looks_like_blind_cmd_timing(arguments or {}, result):
+            return "os_command_execution"
+        if self._looks_like_sql_error(body):
+            return "sql_injection"
         if self._looks_like_auth_bypass(arguments or {}, result):
             return "auth_bypass"
         return None

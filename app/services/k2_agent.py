@@ -106,6 +106,29 @@ sending USER x:) then PASS x on the FTP port, which opens a shell on port 6200).
 Do NOT skip this step — version-identified vulnerabilities in network services
 are often the most severe findings in a scan.
 
+DAST INJECTION METHODOLOGY (how to actually TRIGGER & confirm web bugs):
+For EVERY discovered endpoint test EVERY input: query-string params, form
+fields, AND dynamic URL PATH segments (the "1" in /customer/1 is an input!).
+Inject into the parameter the server actually uses — for /customer/<id> put the
+payload in the PATH (e.g. /customer/1' or /customer/1%20OR%201=1), NOT a made-up
+?id= query param the route ignores. Methodology per class:
+- SQL injection: FIRST send a single bare quote ' alone in the parameter/segment.
+  A 500 response or a SQL error text confirms it instantly. For a search box
+  (?q=, ?search=) the value sits inside LIKE '%...%', so also try
+  %' OR '1'='1' --  and  ' OR '1'='1' -- . A changed/again-erroring result set
+  confirms the injection.
+- OS command injection: if the endpoint ECHOES output, use ;id or ;whoami and
+  read the output. If it does NOT echo output (the response looks unchanged,
+  e.g. {"status":"backup started"}), test BLIND injection with a TIME DELAY:
+  append ;sleep 5 to the parameter (e.g. label=manual;sleep 5) — a response that
+  takes ~5s confirms remote command execution.
+- Path traversal: ../../../../etc/passwd in any file/path/name parameter.
+- Code/template injection: for a formula/expression/eval-style parameter, send
+  input that must evaluate or error (e.g. 7*7 or __import__('os')) and watch for
+  a 500 or evaluated output.
+Never declare an endpoint clean after a single benign payload — vary the payload
+class and the injection point first, and probe EVERY parameter before moving on.
+
 USING execute_safe_poc (critical for confirmation):
 The script you provide runs in a sandboxed Python subprocess. To confirm an
 exploit you MUST make the script's verdict machine-readable:
