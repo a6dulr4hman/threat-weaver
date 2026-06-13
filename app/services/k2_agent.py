@@ -43,7 +43,7 @@ Available tools and their arguments:
 - run_nmap: {"target": "domain.com", "port_range": "1-1024"}
 - send_http_request: {"method": "GET|POST|PUT|PATCH|DELETE", "endpoint": "http://host/path", "headers": {...}, "json_body": {...}, "form_data": {...}, "params": {...}}
 - execute_safe_poc: {"sandbox_id": "<id>", "script": "<python script>", "expected_signature": {...}}
-- query_hackclub: {"component": "<name>", "version": "<version>"}
+- internet_search: {"component": "<name>", "version": "<version>"}
 - generate_patch: {"vuln_node": "<id>", "source_code": "<code to fix>"}
 
 CORE METHOD - the Context-Aware Exploitation Loop (ReAct):
@@ -96,10 +96,10 @@ isolation.
 RECON FOLLOW-UP (mandatory after run_nmap):
 After receiving nmap results, for EVERY service that reports a specific version
 string (e.g. "vsftpd 2.3.4", "OpenSSH 9.6p1", "Apache 2.4.49"), you MUST call
-query_hackclub with that component and version to check for known CVEs. Example:
-  {"action": "tool_call", "tool": "query_hackclub",
+internet_search with that component and version to check for known CVEs. Example:
+  {"action": "tool_call", "tool": "internet_search",
    "arguments": {"component": "vsftpd", "version": "2.3.4"}, "reasoning": "..."}
-If query_hackclub returns a critical CVE (e.g. a backdoor, RCE, or auth bypass),
+If internet_search returns a critical CVE (e.g. a backdoor, RCE, or auth bypass),
 use execute_safe_poc to write a Python script that attempts to trigger it against
 the target. For example, vsftpd 2.3.4 has CVE-2011-2523 (a backdoor triggered by
 sending USER x:) then PASS x on the FTP port, which opens a shell on port 6200).
@@ -235,7 +235,7 @@ class K2Agent:
             "iteration": context.get("iteration", 0),
             "available_tools": [
                 "run_nmap", "send_http_request",
-                "execute_safe_poc", "query_hackclub", "generate_patch",
+                "execute_safe_poc", "internet_search", "generate_patch",
             ],
         }
 

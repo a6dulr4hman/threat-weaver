@@ -76,7 +76,7 @@
                                     'run_fuzzer': 'badge-orange',
                                     'execute_safe_poc': 'badge-red',
                                     'generate_patch': 'badge-green',
-                                    'query_hackclub': 'badge-violet'
+                                    'internet_search': 'badge-violet'
                                 } %}
                                 {% if step.tool %}
                                 <span class="badge {{ tool_badges.get(step.tool, 'badge-neutral') }} badge-mono">{{ step.tool }}</span>
@@ -363,7 +363,7 @@
         const svc=[],cve=[];
         for(const e of entries){const t=e.tool,r=e.result||{},a=e.arguments||{};
             if(t==='run_nmap'){for(const s of(r.results||[]))svc.push(s);}
-            else if(t==='query_hackclub'){cve.push({comp:a.component||'',ver:a.version||'',refs:(r.references||[]).length,err:r.error});}}
+            else if(t==='internet_search'){cve.push({comp:a.component||'',ver:a.version||'',refs:(r.references||[]).length,err:r.error});}}
         if(!svc.length&&!cve.length)return null;
         const lines=[...svc.map(s=>'Port '+s.port+': '+s.service+(s.version?' '+s.version:'')),
                      ...cve.map(c=>c.comp+' '+c.ver+(c.err?' (failed)':' \u2192 '+c.refs+' refs'))];

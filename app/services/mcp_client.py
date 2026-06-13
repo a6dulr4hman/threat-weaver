@@ -346,11 +346,11 @@ class MCPClient:
                     "error": "Python interpreter not found",
                 }
 
-    async def query_hackclub(
+    async def internet_search(
         self, component_signature: str, version_string: str
     ) -> dict:
         """
-        Query the Brave Search API for known vulnerabilities / CVEs.
+        Search the internet for known vulnerabilities / CVEs.
 
         Uses the Brave Web Search API (https://api.search.brave.com) to find
         public CVE disclosures and vulnerability references for a given software

@@ -105,7 +105,7 @@ async def test_execute_safe_poc_missing_interpreter():
     assert "not found" in result["error"]
 
 
-async def test_query_hackclub_error(monkeypatch):
+async def test_internet_search_error(monkeypatch):
     """Mock httpx to return 500, verify graceful fallback."""
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test-key")
     client = MCPClient()
@@ -120,24 +120,24 @@ async def test_query_hackclub_error(monkeypatch):
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
 
-        result = await client.query_hackclub("openssl", "1.0.1")
+        result = await client.internet_search("openssl", "1.0.1")
 
     assert result["references"] == []
     assert result["mitigations"] == []
 
 
-async def test_query_hackclub_no_api_key(monkeypatch):
-    """Without an API key, query_hackclub short-circuits with a helpful error."""
+async def test_internet_search_no_api_key(monkeypatch):
+    """Without an API key, internet_search short-circuits with a helpful error."""
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
     client = MCPClient()
 
-    result = await client.query_hackclub("nginx", "1.14.0")
+    result = await client.internet_search("nginx", "1.14.0")
 
     assert result["references"] == []
     assert "BRAVE_SEARCH_API_KEY" in result["error"]
 
 
-async def test_query_hackclub_parses_web_results(monkeypatch):
+async def test_internet_search_parses_web_results(monkeypatch):
     """A 200 response is parsed from data['web']['results'] into references."""
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test-key")
     client = MCPClient()
@@ -164,7 +164,7 @@ async def test_query_hackclub_parses_web_results(monkeypatch):
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
 
-        result = await client.query_hackclub("openssl", "1.0.1")
+        result = await client.internet_search("openssl", "1.0.1")
 
     assert result["error"] is None
     assert len(result["references"]) == 1
@@ -172,7 +172,7 @@ async def test_query_hackclub_parses_web_results(monkeypatch):
     assert result["vulnerable_components"] == ["openssl@1.0.1"]
 
 
-async def test_query_hackclub_network_error(monkeypatch):
+async def test_internet_search_network_error(monkeypatch):
     """Verify graceful handling of network errors."""
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "BSA-test-key")
     client = MCPClient()
@@ -186,7 +186,7 @@ async def test_query_hackclub_network_error(monkeypatch):
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
 
-        result = await client.query_hackclub("nginx", "1.14.0")
+        result = await client.internet_search("nginx", "1.14.0")
 
     assert result["references"] == []
     assert result["vulnerable_components"] == []

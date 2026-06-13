@@ -270,7 +270,7 @@ async def test_k2_agent_prefers_final_json_object():
 
     response = (
         "<think>I could call something like "
-        '{"action": "tool_call", "tool": "query_hackclub"} but recon comes '
+        '{"action": "tool_call", "tool": "internet_search"} but recon comes '
         "first.</think>\n"
         '{"action": "tool_call", "tool": "run_nmap", "arguments": {"target": "x.com"}}'
     )

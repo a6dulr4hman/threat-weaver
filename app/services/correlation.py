@@ -5,7 +5,7 @@ The agentic scan produces three INDEPENDENT signal streams in
 
 * detections   – ``send_http_request`` / ``run_fuzzer`` results that tripped an
   exploitation signal, plus network-service findings (e.g. a vsftpd backdoor
-  surfaced by ``run_nmap`` + ``query_hackclub`` + a confirmed PoC);
+  surfaced by ``run_nmap`` + ``internet_search`` + a confirmed PoC);
 * verifications – ``execute_safe_poc`` results;
 * remediations – ``generate_patch`` results.
 

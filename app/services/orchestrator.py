@@ -815,7 +815,7 @@ class OrchestratorFSM:
             "run_fuzzer": lambda a: f"Fuzz {a.get('endpoint', a.get('url', 'target'))}",
             "execute_safe_poc": lambda a: f"PoC verification (sandbox {a.get('sandbox_id', '?')})",
             "generate_patch": lambda a: f"Generate patch for {a.get('vuln_node', 'vulnerability')}",
-            "query_hackclub": lambda a: f"CVE lookup: {a.get('component', a.get('version', 'service'))}",
+            "internet_search": lambda a: f"Internet search: {a.get('component', a.get('version', 'service'))}",
         }
         fn = titles.get(tool)
         if fn:
@@ -909,7 +909,7 @@ class OrchestratorFSM:
             "run_fuzzer": FSMState.DAST_TESTING,
             "send_http_request": FSMState.DAST_TESTING,
             "execute_safe_poc": FSMState.POC_VERIFICATION,
-            "query_hackclub": FSMState.POC_VERIFICATION,
+            "internet_search": FSMState.POC_VERIFICATION,
             "generate_patch": FSMState.BLUE_TEAM_REMEDIATION,
         }
         target_state = tool_to_min_state.get(tool_name)
@@ -1348,7 +1348,7 @@ class OrchestratorFSM:
             limited_queries = list(search_queries)[:4]
             if limited_queries:
                 results = await asyncio.gather(
-                    *[self.mcp_client.query_hackclub(q, "") for q in limited_queries],
+                    *[self.mcp_client.internet_search(q, "") for q in limited_queries],
                     return_exceptions=True,
                 )
                 for query, res in zip(limited_queries, results):

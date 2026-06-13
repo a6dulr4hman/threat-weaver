@@ -83,7 +83,7 @@ ready ──▶ recon ──▶ dast_testing ──▶ poc_verification ──�
 | Phase | What happens |
 |---|---|
 | **`ready`** | Job created against a verified workspace; awaiting start. |
-| **`recon`** | `run_nmap` fingerprints open ports + service versions; `query_hackclub` looks up CVEs for any versioned service. |
+| **`recon`** | `run_nmap` fingerprints open ports + service versions; `internet_search` looks up CVEs for any versioned service. |
 | **`dast_testing`** | The agent probes the live app with `send_http_request` / `run_fuzzer`, reading each response and crafting the next payload. |
 | **`poc_verification`** | Crash/error-based findings are reproduced in a sandbox with `execute_safe_poc`. (Success-based exploits like auth bypass are self-confirming.) |
 | **`blue_team_remediation`** | `generate_patch` produces remediation code for each confirmed vulnerability. |
@@ -142,7 +142,7 @@ All tools are dispatched by the MCP client ([`app/services/mcp_client.py`](app/s
 | **`run_nmap`** | Recon | `nmap -sV` service/version detection (light probes, aggressive timing, 90s host timeout). Returns `[{protocol, port, state, service, version}]`. Degrades gracefully if `nmap` isn't installed. |
 | **`send_http_request`** | Primary weapon | Raw single HTTP request (GET/POST/PUT/PATCH/DELETE/…). Supports `json_body` *and* `form_data`. Flags `is_server_error`, `stack_trace_detected`, and `server_crash_suspected` (a dropped connection = likely backend crash). Persistent cookie jar. Body capped at 12 000 chars to protect the context window. |
 | **`run_fuzzer`** | Batch probing | Sends a matrix of payloads, measures status/length/timing, flags 5xx and crash-signal transport errors as anomalies. |
-| **`query_hackclub`** | CVE lookup | Researches known CVEs for a `component` + `version` via the **Brave Web Search API** (reads `BRAVE_SEARCH_API_KEY`). Returns reference URLs/titles/descriptions. |
+| **`internet_search`** | CVE lookup | Researches known CVEs for a `component` + `version` via the **Brave Web Search API** (reads `BRAVE_SEARCH_API_KEY`). Returns reference URLs/titles/descriptions. |
 | **`execute_safe_poc`** | Verification | Runs an agent-authored Python script in an isolated `python3` subprocess (30s limit, sensitive env vars stripped, temp CWD). The script prints a JSON verdict that's matched against an `expected_signature`. Includes crash-marker fallback detection. |
 | **`generate_patch`** | Remediation | Produces patch code + description + risk level + CVE refs for a confirmed `vuln_node`; persisted as a `Mitigation` row. |
 
@@ -387,7 +387,7 @@ uvicorn app.main:app --reload
 | `CLERK_SECRET_KEY` | for auth | — | Clerk backend key. **Unset = auth disabled** (dev/tests). |
 | `SECRET_KEY` | yes | — | Signs verification nonces. |
 | `K2_API_KEY` | yes | — | K2-Think-v2 reasoning model API key. |
-| `BRAVE_SEARCH_API_KEY` | for CVE lookup | — | Powers the `query_hackclub` CVE research tool. |
+| `BRAVE_SEARCH_API_KEY` | for CVE lookup | — | Powers the `internet_search` CVE research tool. |
 | `DATABASE_URL` | no | `sqlite+aiosqlite:///./threatweaver.db` | DB connection string. |
 | `REPORT_DIR` | no | `/tmp/threatweaver/reports` | Where PDF reports are written. |
 | `CYCLE_BUDGET_SECONDS` | no | `480` | Wall-clock budget per scan cycle (see limits). |

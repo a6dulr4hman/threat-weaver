@@ -26,7 +26,7 @@ class ToolExecutor:
             "run_fuzzer": self._exec_fuzzer,
             "send_http_request": self._exec_send_http,
             "execute_safe_poc": self._exec_poc,
-            "query_hackclub": self._exec_hackclub,
+            "internet_search": self._exec_internet_search,
             "generate_patch": self._exec_patch,
         }
 
@@ -74,10 +74,10 @@ class ToolExecutor:
         signature = args.get("expected_signature", {})
         return await self.mcp_client.execute_safe_poc(sandbox_id, script, signature)
 
-    async def _exec_hackclub(self, args: dict) -> dict:
+    async def _exec_internet_search(self, args: dict) -> dict:
         component = args.get("component", "")
         version = args.get("version", "")
-        return await self.mcp_client.query_hackclub(component, version)
+        return await self.mcp_client.internet_search(component, version)
 
     async def _exec_patch(self, args: dict) -> dict:
         vuln_node = args.get("vuln_node", "")
