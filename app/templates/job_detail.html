@@ -263,8 +263,9 @@
     let VULNS={{ ((job.attack_graph_data.vulnerabilities or []) if job.attack_graph_data else []) | tojson }} || [];
     const canvas=document.getElementById('attackGraphCanvas');
     const ctx=canvas.getContext('2d');
-    const dpr=window.devicePixelRatio||1;
+    const dpr=Math.min(window.devicePixelRatio||1,2);
     let scale=1,offsetX=40,offsetY=40,dragging=false,lastMouse={x:0,y:0},hoverNode=null;
+    let rafId=null,paused=false;  // on-demand render state (renderer defined below)
     const NODE_BG='#0a0a0a',NODE_BG2='#111214';
     const TITLE='#fafafa',BODY='#cfcfcf',DIM='#8a8a8a';
     const ACCENT={recon:'#22d3ee',scan:'#3b82f6',finding:'#f87171',verify:'#fbbf24',patch:'#4ade80'};
@@ -420,6 +421,7 @@
             if(!prevKeys.has(key)) anim.set(n,{born:now});
         }
         nodes=out.nodes;edges=out.edges;
+        requestRender();  // schedule a redraw (renderer idles when nothing changes)
     }
     rebuild();
 
@@ -545,18 +547,40 @@
 
     canvas.addEventListener('mousedown',e=>{dragging=true;lastMouse={x:e.clientX,y:e.clientY};canvas.style.cursor='grabbing';});
     canvas.addEventListener('mousemove',e=>{
-        if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};return;}
-        hoverNode=hitTest(e.clientX,e.clientY);});
+        if(dragging){offsetX+=e.clientX-lastMouse.x;offsetY+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};requestRender();return;}
+        const prev=hoverNode;hoverNode=hitTest(e.clientX,e.clientY);
+        if(prev!==hoverNode)requestRender();  // only redraw when the hovered node changes
+    });
     canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
-    canvas.addEventListener('mouseleave',()=>{dragging=false;hoverNode=null;});
-    canvas.addEventListener('wheel',e=>{e.preventDefault();scale*=(e.deltaY<0?1.12:0.88);clampView();},{passive:false});
-    window.graphZoom=f=>{scale*=f;clampView();};
-    window.graphReset=()=>{scale=fitScale();clampView();};
-    window.addEventListener('resize',()=>{resize();clampView();});
+    canvas.addEventListener('mouseleave',()=>{dragging=false;if(hoverNode){hoverNode=null;requestRender();}});
+    canvas.addEventListener('wheel',e=>{e.preventDefault();scale*=(e.deltaY<0?1.12:0.88);clampView();requestRender();},{passive:false});
+    window.graphZoom=f=>{scale*=f;clampView();requestRender();};
+    window.graphReset=()=>{scale=fitScale();clampView();requestRender();};
+    window.addEventListener('resize',()=>{resize();clampView();requestRender();});
     resize();scale=fitScale();clampView();
 
-    function loop(){flow=(flow+0.45)%12;draw();requestAnimationFrame(loop);}
-    loop();
+    // --- On-demand renderer ------------------------------------------------
+    // The graph used to redraw at 60fps FOREVER (gradients, shadows, bezier
+    // curves) even when nothing changed — pinning a CPU core and overheating
+    // laptops. It now renders ONLY when something changes: while node entrance
+    // animations are in flight, on interaction (pan/zoom/hover), on live data
+    // updates, and once on load. When the graph is static, rendering stops
+    // entirely (zero CPU). Hidden tabs pause rendering completely.
+    function frame(){
+        rafId=null;
+        const animating=anim.size>0&&!paused;
+        if(animating)flow=(flow+0.45)%12;        // advance edge flow only while animating
+        draw();
+        if(animating)rafId=requestAnimationFrame(frame);  // keep going until anims settle
+    }
+    function requestRender(){if(rafId===null&&!paused)rafId=requestAnimationFrame(frame);}
+    window.__graphRender=requestRender;           // let the live poll trigger redraws
+    document.addEventListener('visibilitychange',()=>{
+        paused=document.hidden;
+        if(paused){if(rafId!==null){cancelAnimationFrame(rafId);rafId=null;}}
+        else requestRender();
+    });
+    requestRender();
 
     if(JOB_STATUS!=='complete'){
         function startLivePoll(){
