@@ -132,8 +132,15 @@
             },
             {
                 title: 'Download the report',
-                body: 'When the scan completes, an overall severity and a downloadable PDF report appear at the top of the page.',
-                selector: null
+                // Focus the report if it has rendered; otherwise tell the user
+                // to wait for the scan to finish.
+                resolve: function () {
+                    var sec = document.getElementById('reportSection');
+                    var ready = sec && !sec.classList.contains('hidden');
+                    return ready
+                        ? { selector: '#reportSection', body: 'Your scan finished. Here you\'ll find the overall severity and a button to download the full PDF report.' }
+                        : { selector: null, body: 'The report isn\'t ready yet. Once the scan completes, the overall severity and a downloadable PDF report will appear here at the top of the page — hang tight!' };
+                }
             }
         ]
     };
@@ -164,7 +171,7 @@
 
     function repositionTour() {
         if (!tourState) return;
-        const step = tourState.steps[tourState.index];
+        const step = tourState.current || tourState.steps[tourState.index];
         const ring = document.querySelector('.tw-tour-ring');
         const pop = document.querySelector('.tw-tour-pop');
         if (!pop) return;
@@ -211,7 +218,14 @@
     function renderStep() {
         clearTourDom();
         if (!tourState) return;
-        const step = tourState.steps[tourState.index];
+        // A step may compute its target/copy at display time (e.g. the report
+        // step focuses the report if it has rendered, else shows a "not ready"
+        // message). resolve() returns partial overrides merged onto the step.
+        let step = tourState.steps[tourState.index];
+        if (typeof step.resolve === 'function') {
+            step = Object.assign({}, step, step.resolve() || {});
+        }
+        tourState.current = step;
         const total = tourState.steps.length;
         const isLast = tourState.index === total - 1;
         const isFirst = tourState.index === 0;
@@ -221,10 +235,12 @@
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
-        // Invisible click-blocker so the page can't be interacted with mid-tour.
+        // Invisible click-shield so the page can't be interacted with mid-tour.
+        // It does NOT dismiss the tour — the guide stays until the user uses
+        // Next/Back/Skip/Done. (Previously any click here closed the tour, so
+        // it vanished the moment you touched the page.)
         const block = document.createElement('div');
         block.className = 'tw-tour-overlay-block';
-        block.addEventListener('click', function () { endTour(true); });
         document.body.appendChild(block);
 
         const ring = document.createElement('div');
@@ -277,9 +293,10 @@
     function startTour(page) {
         const defs = TOURS[page];
         if (!defs) return;
-        // Keep only steps whose target exists (null-target intro/outro always kept).
+        // Keep only steps whose target exists (null-target or dynamic-resolve
+        // steps are always kept).
         const steps = defs.filter(function (s) {
-            return !s.selector || document.querySelector(s.selector);
+            return !s.selector || s.resolve || document.querySelector(s.selector);
         });
         if (!steps.length) return;
         tourState = { page: page, steps: steps, index: 0 };

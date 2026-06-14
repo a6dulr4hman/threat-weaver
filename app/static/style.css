@@ -709,3 +709,24 @@ html.light .tw-tour-ring {
 .tw-table tbody tr.row-link { cursor: pointer; }
 .tw-table tbody tr.row-link:hover { background: rgba(255, 255, 255, 0.05); }
 html.light .tw-table tbody tr.row-link:hover { background: rgba(15, 23, 42, 0.045); }
+
+
+/* ============================================================
+   Light theme — extra overrides
+   Several helpers hard-code #fff (page/section titles) or white hover
+   text, which vanish on a light background. Map them to the foreground.
+   ============================================================ */
+html.light .page-title,
+html.light .section-title { color: var(--foreground); }
+html.light .btn-ghost { color: var(--muted); }
+html.light .btn-ghost:hover:not(:disabled) { color: var(--foreground); background: rgba(15, 23, 42, 0.05); }
+html.light .surface-inset { background: #f4f5f7; }
+html.light .card {
+    box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.6) inset,
+                0 8px 24px -16px rgba(15, 23, 42, 0.25);
+}
+/* Inputs / code blocks that hard-code a near-black fill */
+html.light .code-block,
+html.light pre.code-block { background: #f4f5f7 !important; color: #1c2024; }
+/* Token sidebar cells use bg-ink-950 (mapped) — ensure the divider grid reads */
+html.light .bg-ink-950 { color: var(--foreground); }

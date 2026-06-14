@@ -87,6 +87,11 @@
             font-weight: 600 !important;
             text-transform: none !important;
         }
+        /* The broad ".cl-card span { color:#ededed }" rule above also matched
+           the button's inner label span, turning the text white-on-white.
+           Re-assert dark text with higher specificity so it stays readable. */
+        .cl-card .cl-formButtonPrimary,
+        .cl-card .cl-formButtonPrimary * { color: #000 !important; }
         .cl-formButtonPrimary:hover { background: #e2e2e2 !important; }
 
         /* Form labels */

@@ -92,14 +92,14 @@
             <button onclick="graphZoom(0.8)" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-base font-medium transition-colors">&minus;</button>
             <button onclick="graphReset()" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-xs transition-colors" title="Fit to content">&#x21BA;</button>
         </div>
-        <div class="absolute top-3 left-3 flex flex-wrap gap-x-3 gap-y-1.5 text-[10px] text-ink-200 z-20 pr-16">
+        <div class="absolute top-3 left-3 flex flex-wrap gap-x-3 gap-y-1.5 text-[11px] z-20 pr-16" style="color:rgba(255,255,255,0.72)">
             <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#22d3ee"></span>Recon</span>
             <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#3b82f6"></span>Scanning</span>
             <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#f87171"></span>Finding</span>
             <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#fbbf24"></span>PoC</span>
             <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:#4ade80"></span>Patch</span>
         </div>
-        <p class="absolute bottom-3 left-3 z-20 text-[10px] text-ink-500">Drag to pan &middot; scroll to zoom</p>
+        <p class="absolute bottom-3 left-3 z-20 text-xs font-medium" style="color:rgba(255,255,255,0.85);text-shadow:0 1px 3px rgba(0,0,0,0.7)">Drag to pan &middot; scroll to zoom</p>
     </div>
 
     <script>
@@ -474,7 +474,7 @@
             if(JSON.stringify(nv)!==JSON.stringify(VULNS)){VULNS=nv;changed=true;}
             if(changed){rebuild();scale=fitScale();clampView();}
             // Live thought process — stream each reasoning step as it lands.
-            if(window.__renderThoughts)window.__renderThoughts(job.structured_thoughts);
+            if(window.__renderThoughts)window.__renderThoughts(job.structured_thoughts,ag.thinking_log);
             // Live report + K2 assessment, rendered in place (no page reload).
             if(window.__renderJobSections)window.__renderJobSections(ag,job);
             // Live token counter (animated count-up + flash)
@@ -629,13 +629,48 @@
     const PHASE_LABEL={ready:'Scan starting\u2026',recon:'Recon \u00b7 live',dast_testing:'Exploiting \u00b7 live',poc_verification:'Verifying \u00b7 live',blue_team_remediation:'Patching \u00b7 live',complete:'Finalizing\u2026'};
 
     // ---- Thought process timeline (streams each step as it lands) ----
-    let __lastThoughtCount=-1;
-    window.__renderThoughts=function(thoughts){
+    // structured_thoughts is only written to its DB column at finalization,
+    // but the raw reasoning (thinking_log) is persisted live in attack_graph.
+    // So while the scan runs we build the SAME timeline client-side from
+    // thinking_log; once finalized we use the server's structured_thoughts.
+    // (Mirrors orchestrator._build_thought_timeline / _thought_title.)
+    function thoughtTitle(tool,a){
+        a=a||{};
+        switch(tool){
+            case 'run_nmap': return 'Port scan '+(a.target||'target');
+            case 'send_http_request': return (a.method||'GET')+' '+(a.endpoint||'');
+            case 'run_fuzzer': return 'Fuzz '+(a.endpoint||a.url||'target');
+            case 'execute_safe_poc': return 'PoC verification (sandbox '+(a.sandbox_id||'?')+')';
+            case 'generate_patch': return 'Generate patch for '+(a.vuln_node||'vulnerability');
+            case 'internet_search': return 'Internet search: '+(a.component||a.version||'service');
+            default: return tool?('Execute '+tool):'';
+        }
+    }
+    function buildTimeline(log){
+        if(!Array.isArray(log)||!log.length)return [];
+        return log.map(function(entry,i){
+            const tool=entry.tool||'';const action=entry.action||'';const args=entry.arguments||{};
+            let title;
+            if(tool)title=thoughtTitle(tool,args);
+            else if(action==='complete')title='Concluded the analysis';
+            else if(action==='error')title='Recovering from an unparsable response';
+            else title='Reasoning step '+(i+1);
+            const think=String(entry.think||'').trim();const reasoning=String(entry.reasoning||'').trim();
+            const details=think||reasoning||('Decided to '+(action||'act')+'.');
+            return {step_title:title,details:details,iteration:(entry.iteration!=null?entry.iteration:i),tool:tool||action};
+        });
+    }
+    let __lastThoughtSig='';
+    window.__renderThoughts=function(thoughts,thinkingLog){
         const ol=document.getElementById('thoughtTimeline');const cnt=document.getElementById('thoughtCount');
         if(!ol)return;
         thoughts=Array.isArray(thoughts)?thoughts:[];
-        if(thoughts.length===__lastThoughtCount)return;
-        __lastThoughtCount=thoughts.length;
+        // Prefer the server's finalized timeline; otherwise derive it live.
+        if(!thoughts.length)thoughts=buildTimeline(thinkingLog);
+        const last=thoughts[thoughts.length-1]||{};
+        const sig=thoughts.length+'|'+(last.iteration!=null?last.iteration:'')+'|'+(last.tool||'')+'|'+String(last.details||'').length;
+        if(sig===__lastThoughtSig)return;
+        __lastThoughtSig=sig;
         if(cnt)cnt.textContent=thoughts.length+' step'+(thoughts.length===1?'':'s');
         if(!thoughts.length){
             ol.innerHTML='<li class="tw-timeline-item"><span class="tw-timeline-node" style="border-color:#8a8a8a;box-shadow:0 0 0 3px rgba(138,138,138,0.15)"></span><div class="tw-timeline-card"><div class="py-2.5 px-3 text-sm text-ink-300">Waiting for the agent to begin reasoning\u2026</div></div></li>';
@@ -721,7 +756,7 @@
     const INIT_THOUGHTS={{ (job.structured_thoughts or (job.attack_graph_data.structured_thoughts if job.attack_graph_data else None) or []) | tojson }};
     const INIT_AG={{ (job.attack_graph_data or {}) | tojson }};
     const INIT_JOB={overall_severity:{{ (job.overall_severity or '') | tojson }}};
-    window.__renderThoughts(INIT_THOUGHTS);
+    window.__renderThoughts(INIT_THOUGHTS,INIT_AG.thinking_log);
     window.__renderJobSections(INIT_AG,INIT_JOB);
 })();
 </script>
