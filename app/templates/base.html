@@ -39,7 +39,7 @@
     <div class="tw-grid-bg" aria-hidden="true"></div>
 
     <nav class="sticky top-0 z-40 border-b border-white/10 bg-black/70 backdrop-blur-xl">
-        <div class="mx-auto max-w-6xl px-5 h-14 flex items-center justify-between">
+        <div class="mx-auto max-w-[90%] px-5 h-14 flex items-center justify-between">
             <!-- Logo -->
             <a href="/" class="flex items-center gap-2.5 group">
                 <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-black shadow-sm">
@@ -94,12 +94,12 @@
         </div>
     </nav>
 
-    <main class="relative z-10 mx-auto w-full max-w-6xl px-5 py-10 flex-1">
+    <main class="relative z-10 mx-auto w-full max-w-[90%] px-5 py-10 flex-1">
         {% block content %}{% endblock %}
     </main>
 
     <footer class="relative z-10 border-t border-white/10">
-        <div class="mx-auto max-w-6xl px-5 py-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-ink-300">
+        <div class="mx-auto max-w-[90%] px-5 py-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-ink-300">
             <p>ThreatWeaver &mdash; Autonomous DevSecOps Engine</p>
             <p class="text-ink-400">Attack surface analysis &amp; AI remediation</p>
         </div>
@@ -117,6 +117,43 @@
         const CDN_PRIMARY  = 'https://clerk.clerk.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
         const CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js';
 
+        // Build a Clerk appearance that matches the current ThreatWeaver theme,
+        // so the account modal (openUserProfile) isn't a white box on our dark UI.
+        function clerkAppearance() {
+            const isLight = document.documentElement.classList.contains('light');
+            if (isLight) {
+                return { variables: { borderRadius: '0.5rem', colorPrimary: '#11151a' } };
+            }
+            return {
+                variables: {
+                    colorBackground: '#0a0a0a',
+                    colorText: '#ededed',
+                    colorTextSecondary: '#a1a1a1',
+                    colorPrimary: '#ffffff',
+                    colorInputBackground: '#0a0a0a',
+                    colorInputText: '#ededed',
+                    colorNeutral: '#ffffff',
+                    borderRadius: '0.5rem'
+                },
+                elements: {
+                    card: { backgroundColor: '#0a0a0a', borderColor: 'rgba(255,255,255,0.1)' },
+                    modalContent: { color: '#ededed' },
+                    modalCloseButton: { color: '#ededed' },
+                    navbar: { background: '#0a0a0a', borderColor: 'rgba(255,255,255,0.08)' },
+                    navbarButton: { color: '#ededed' },
+                    scrollBox: { backgroundColor: '#0a0a0a' },
+                    pageScrollBox: { backgroundColor: '#0a0a0a' },
+                    page: { backgroundColor: '#0a0a0a' },
+                    profileSection: { borderColor: 'rgba(255,255,255,0.08)' },
+                    profileSectionTitleText: { color: '#ededed' },
+                    headerTitle: { color: '#ffffff' },
+                    headerSubtitle: { color: '#a1a1a1' },
+                    accordionTriggerButton: { color: '#ededed' }
+                }
+            };
+        }
+        window.__clerkAppearance = clerkAppearance;
+
         function loadScript(src, onSuccess, onFail) {
             const s = document.createElement('script');
             s.setAttribute('data-clerk-publishable-key', pk);
@@ -133,7 +170,7 @@
             if (!clerk) return;
             if (typeof clerk === 'function') { clerk = new window.Clerk(pk); }
             try {
-                await clerk.load();
+                await clerk.load({ appearance: clerkAppearance() });
 
                 // Expose a global helper so all API fetch calls can attach the token.
                 window.getAuthHeaders = async function() {
@@ -165,7 +202,7 @@
                         userInfo.addEventListener('click', () => {
                             try {
                                 if (typeof clerk.openUserProfile === 'function') {
-                                    clerk.openUserProfile();
+                                    clerk.openUserProfile({ appearance: clerkAppearance() });
                                 } else {
                                     window.location.href = 'https://accounts.clerk.dev/user';
                                 }

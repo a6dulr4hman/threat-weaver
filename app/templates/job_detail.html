@@ -27,10 +27,10 @@
                 Start scan
             </button>
             {% elif job.status != "complete" %}
-            <span id="live-indicator" class="badge badge-neutral">
-                <span class="relative flex h-2 w-2">
+            <span id="live-indicator" class="badge badge-neutral font-semibold" style="font-size:0.95rem;padding:0.5rem 1rem;gap:0.5rem;">
+                <span class="relative flex h-2.5 w-2.5">
                     <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span>
-                    <span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
                 </span>
                 <span id="liveLabel">{% if job.status == "ready" %}Scan starting&hellip;{% else %}Scanning live{% endif %}</span>
             </span>
@@ -59,6 +59,7 @@
     </div>
     <div class="mt-5 ml-1">
         <ol class="tw-timeline" id="thoughtTimeline"></ol>
+        <div id="thoughtToggle" class="mt-3 ml-1"></div>
     </div>
 </section>
 
@@ -474,7 +475,7 @@
             if(JSON.stringify(nv)!==JSON.stringify(VULNS)){VULNS=nv;changed=true;}
             if(changed){rebuild();scale=fitScale();clampView();}
             // Live thought process — stream each reasoning step as it lands.
-            if(window.__renderThoughts)window.__renderThoughts(job.structured_thoughts,ag.thinking_log);
+            if(window.__renderThoughts)window.__renderThoughts(job.structured_thoughts,ag.thinking_log,isComplete);
             // Live report + K2 assessment, rendered in place (no page reload).
             if(window.__renderJobSections)window.__renderJobSections(ag,job);
             // Live token counter (animated count-up + flash)
@@ -614,7 +615,7 @@
             <div class="mt-0.5 text-lg font-semibold text-ink-100 tracking-tight" id="tkCalls">{{ token_usage.llm_calls or 0 if token_usage else 0 }}</div>
         </div>
     </div>
-    <p class="text-[11px] text-ink-400 mt-3 leading-relaxed">Counts every K2-Think-v2 call: agent reasoning, patch synthesis, and final assessment.</p>
+    <p class="text-[11px] text-ink-400 mt-3 leading-relaxed">Counts every K2 Think V2 call: agent reasoning, patch synthesis, and final assessment.</p>
 </section>
 </aside>
 
@@ -661,31 +662,68 @@
         });
     }
     let __lastThoughtSig='';
-    window.__renderThoughts=function(thoughts,thinkingLog){
-        const ol=document.getElementById('thoughtTimeline');const cnt=document.getElementById('thoughtCount');
+    let __thoughtsExpanded=false, __thoughtsCache=[], __thoughtsComplete=false;
+
+    function thoughtItemHtml(step){
+        const tool=step.tool?('<span class="badge '+(TOOL_BADGE[step.tool]||'badge-neutral')+' badge-mono">'+esc(step.tool)+'</span>'):'';
+        const details=step.details?('<div class="px-3 pb-3 pt-1"><p class="tw-timeline-details">'+esc(step.details)+'</p></div>'):'';
+        const iter=(step.iteration!=null)?('<span class="text-xs text-ink-400 tabular-nums">#'+esc(step.iteration)+'</span>'):'';
+        return '<li class="tw-timeline-item"><span class="tw-timeline-node" aria-hidden="true"></span>'+
+            '<details class="tw-timeline-card group/step"><summary class="flex items-center justify-between gap-3 cursor-pointer list-none select-none py-2 px-3">'+
+            '<div class="flex items-center gap-2 min-w-0"><svg class="w-3.5 h-3.5 flex-shrink-0 text-ink-300 group-open/step:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'+
+            '<span class="tw-timeline-title">'+esc(step.step_title||('Step '+(step.iteration!=null?step.iteration:'')))+'</span></div>'+
+            '<div class="flex items-center gap-2 flex-shrink-0">'+tool+iter+'</div></summary>'+details+'</details></li>';
+    }
+
+    function renderThoughtList(){
+        const ol=document.getElementById('thoughtTimeline');
+        const cnt=document.getElementById('thoughtCount');
+        const toggle=document.getElementById('thoughtToggle');
         if(!ol)return;
+        const all=__thoughtsCache;const total=all.length;
+        if(cnt)cnt.textContent=total+' step'+(total===1?'':'s');
+        if(!total){
+            ol.innerHTML='<li class="tw-timeline-item"><span class="tw-timeline-node" style="border-color:#8a8a8a;box-shadow:0 0 0 3px rgba(138,138,138,0.15)"></span><div class="tw-timeline-card"><div class="py-2.5 px-3 text-sm text-ink-300">Waiting for the agent to begin reasoning\u2026</div></div></li>';
+            if(toggle)toggle.innerHTML='';
+            return;
+        }
+        // Collapsed view: while running show the LATEST 3 (newest first relevant),
+        // once finished show the TOP 3 (the start of the run). Expand for the rest.
+        let visible, note='';
+        if(__thoughtsExpanded||total<=3){visible=all;}
+        else if(__thoughtsComplete){visible=all.slice(0,3);note='Showing the first 3 of '+total+' steps';}
+        else{visible=all.slice(-3);note='Showing the latest 3 of '+total+' steps';}
+        ol.innerHTML=visible.map(thoughtItemHtml).join('');
+        if(toggle){
+            if(total>3){
+                toggle.innerHTML=
+                    '<button type="button" onclick="window.__toggleThoughts()" class="inline-flex items-center gap-1.5 text-xs font-medium text-ink-200 hover:text-white transition-colors">'+
+                    '<svg class="w-3.5 h-3.5 transition-transform '+(__thoughtsExpanded?'rotate-90':'')+'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'+
+                    (__thoughtsExpanded?'Show fewer steps':('Show all '+total+' steps'))+'</button>'+
+                    (note&&!__thoughtsExpanded?'<span class="ml-2 text-xs text-ink-400">'+note+'</span>':'');
+            } else {
+                toggle.innerHTML='';
+            }
+        }
+    }
+
+    window.__renderThoughts=function(thoughts,thinkingLog,isComplete){
         thoughts=Array.isArray(thoughts)?thoughts:[];
         // Prefer the server's finalized timeline; otherwise derive it live.
         if(!thoughts.length)thoughts=buildTimeline(thinkingLog);
+        __thoughtsComplete=!!isComplete;
         const last=thoughts[thoughts.length-1]||{};
-        const sig=thoughts.length+'|'+(last.iteration!=null?last.iteration:'')+'|'+(last.tool||'')+'|'+String(last.details||'').length;
+        const sig=thoughts.length+'|'+(last.iteration!=null?last.iteration:'')+'|'+(last.tool||'')+'|'+String(last.details||'').length+'|'+__thoughtsComplete+'|'+__thoughtsExpanded;
         if(sig===__lastThoughtSig)return;
         __lastThoughtSig=sig;
-        if(cnt)cnt.textContent=thoughts.length+' step'+(thoughts.length===1?'':'s');
-        if(!thoughts.length){
-            ol.innerHTML='<li class="tw-timeline-item"><span class="tw-timeline-node" style="border-color:#8a8a8a;box-shadow:0 0 0 3px rgba(138,138,138,0.15)"></span><div class="tw-timeline-card"><div class="py-2.5 px-3 text-sm text-ink-300">Waiting for the agent to begin reasoning\u2026</div></div></li>';
-            return;
-        }
-        ol.innerHTML=thoughts.map(function(step){
-            const tool=step.tool?('<span class="badge '+(TOOL_BADGE[step.tool]||'badge-neutral')+' badge-mono">'+esc(step.tool)+'</span>'):'';
-            const details=step.details?('<div class="px-3 pb-3 pt-1"><p class="tw-timeline-details">'+esc(step.details)+'</p></div>'):'';
-            const iter=(step.iteration!=null)?('<span class="text-xs text-ink-400 tabular-nums">#'+esc(step.iteration)+'</span>'):'';
-            return '<li class="tw-timeline-item"><span class="tw-timeline-node" aria-hidden="true"></span>'+
-                '<details class="tw-timeline-card group/step"><summary class="flex items-center justify-between gap-3 cursor-pointer list-none select-none py-2 px-3">'+
-                '<div class="flex items-center gap-2 min-w-0"><svg class="w-3.5 h-3.5 flex-shrink-0 text-ink-300 group-open/step:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'+
-                '<span class="tw-timeline-title">'+esc(step.step_title||('Step '+(step.iteration!=null?step.iteration:'')))+'</span></div>'+
-                '<div class="flex items-center gap-2 flex-shrink-0">'+tool+iter+'</div></summary>'+details+'</details></li>';
-        }).join('');
+        __thoughtsCache=thoughts;
+        renderThoughtList();
+    };
+
+    window.__toggleThoughts=function(){
+        __thoughtsExpanded=!__thoughtsExpanded;
+        __lastThoughtSig='';   // force the next poll to re-evaluate
+        renderThoughtList();
     };
 
     // ---- Report (severity + PDF download) ----
@@ -713,7 +751,7 @@
         const key=JSON.stringify([a,counts]);if(key===__lastAssess)return;__lastAssess=key;
         if(!a){sec.classList.add('hidden');return;}
         const risk=String(a.overall_risk||'Informational').toLowerCase();
-        let html='<h2 class="section-title mb-4 flex items-center gap-2"><svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>K2-Think-v2 security assessment</h2>';
+        let html='<h2 class="section-title mb-4 flex items-center gap-2"><svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>K2 Think V2 security assessment</h2>';
         if(counts){
             html+='<div class="grid grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden mb-5">'+
             '<div class="bg-ink-950 px-4 py-3 text-center"><div class="text-2xl font-semibold text-white tracking-tight">'+esc(counts.detected)+'</div><div class="eyebrow mt-0.5">Detected</div></div>'+
@@ -738,7 +776,7 @@
             }).join('');
             html+='</tbody></table></div>';
         }
-        html+='<p class="text-xs text-ink-400 mt-4">K2-Think-v2 selected one definitive verdict per vulnerability from the evidence gathered during this scan.</p>';
+        html+='<p class="text-xs text-ink-400 mt-4">K2 Think V2 selected one definitive verdict per vulnerability from the evidence gathered during this scan.</p>';
         sec.innerHTML=html;sec.classList.remove('hidden');
     };
 
@@ -756,7 +794,8 @@
     const INIT_THOUGHTS={{ (job.structured_thoughts or (job.attack_graph_data.structured_thoughts if job.attack_graph_data else None) or []) | tojson }};
     const INIT_AG={{ (job.attack_graph_data or {}) | tojson }};
     const INIT_JOB={overall_severity:{{ (job.overall_severity or '') | tojson }}};
-    window.__renderThoughts(INIT_THOUGHTS,INIT_AG.thinking_log);
+    const INIT_COMPLETE={{ (job.status == 'complete') | tojson }};
+    window.__renderThoughts(INIT_THOUGHTS,INIT_AG.thinking_log,INIT_COMPLETE);
     window.__renderJobSections(INIT_AG,INIT_JOB);
 })();
 </script>
@@ -854,7 +893,7 @@ if (startJobBtn) {
             });
             if (resp.ok) {
                 // Replace button with live indicator immediately.
-                startJobBtn.outerHTML = '<span id="live-indicator" class="badge badge-neutral"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span></span><span id="liveLabel">Scan starting\u2026</span></span>';
+                startJobBtn.outerHTML = '<span id="live-indicator" class="badge badge-neutral font-semibold" style="font-size:0.95rem;padding:0.5rem 1rem;gap:0.5rem;"><span class="relative flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span></span><span id="liveLabel">Scan starting\u2026</span></span>';
                 // Kick off poll loop (the graph IIFE skipped it because JOB_STATUS was pending/ready).
                 if (window.__startLivePoll) window.__startLivePoll();
             } else {
