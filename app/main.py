@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, init_db
 from app.models import Workspace
-from app.routers import jobs, workspaces
+from app.routers import jobs, workspaces, guides
 from app.services.auth import (
     CLERK_PUBLISHABLE_KEY,
     _AUTH_ENABLED,
@@ -60,6 +60,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 app.include_router(workspaces.router)
 app.include_router(jobs.router)
+app.include_router(guides.router)
 
 
 # ---------------------------------------------------------------------------

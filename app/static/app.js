@@ -163,10 +163,40 @@
 
     function endTour(markDone) {
         if (tourState && markDone) {
-            try { localStorage.setItem('tw-tour-' + tourState.page, '1'); } catch (e) {}
+            markGuideDone(tourState.page);
         }
         tourState = null;
         clearTourDom();
+    }
+
+    // ---------------------------------------------------------------
+    // Guide-completion state — persisted PER ACCOUNT in the DB so a new
+    // account sees the guide on every page (dashboard/workspace/job) until
+    // finished. localStorage is kept only as an offline fallback cache.
+    // ---------------------------------------------------------------
+    function markGuideDone(page) {
+        try { localStorage.setItem('tw-tour-' + page, '1'); } catch (e) {}
+        try {
+            fetch('/api/guides/' + page + '/complete', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            }).catch(function () {});
+        } catch (e) {}
+    }
+
+    function fetchCompletedGuides() {
+        return fetch('/api/guides', {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' }
+        }).then(function (r) {
+            if (!r.ok) return null;
+            return r.json();
+        }).then(function (d) {
+            return (d && Array.isArray(d.completed)) ? d.completed : null;
+        }).catch(function () {
+            return null; // server unreachable → caller falls back to localStorage
+        });
     }
 
     function repositionTour() {
@@ -320,14 +350,21 @@
         window.location.href = row.getAttribute('data-href');
     });
 
-    // Auto-start once per page type on first visit.
+    // Auto-start once per page type until the account has finished it.
     document.addEventListener('DOMContentLoaded', function () {
         const page = detectPage();
         if (!page) return;
-        var done = false;
-        try { done = localStorage.getItem('tw-tour-' + page) === '1'; } catch (e) {}
-        if (!done) {
-            setTimeout(function () { startTour(page); }, 700);
-        }
+        fetchCompletedGuides().then(function (completed) {
+            var done;
+            if (completed === null) {
+                // Server unreachable — fall back to the local cache.
+                try { done = localStorage.getItem('tw-tour-' + page) === '1'; } catch (e) { done = false; }
+            } else {
+                done = completed.indexOf(page) !== -1;
+            }
+            if (!done) {
+                setTimeout(function () { startTour(page); }, 700);
+            }
+        });
     });
 })();

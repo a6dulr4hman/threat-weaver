@@ -40,3 +40,17 @@ class Mitigation(Base):
     # Structured finding metadata: description, risk_level, cves, recommendation.
     # Stored as JSON so new fields can be added without schema migrations.
     finding_metadata = Column(JSON, nullable=True)
+
+
+class UserGuide(Base):
+    """Tracks which in-app onboarding guides each account has finished.
+
+    Keyed by the Clerk user_id. ``completed`` is a JSON list of guide keys
+    (e.g. ["dashboard", "workspace", "job"]). A brand-new account has no row
+    (or an empty list), so every page's guide is shown until completed.
+    """
+
+    __tablename__ = "user_guides"
+
+    user_id = Column(String(64), primary_key=True)
+    completed = Column(JSON, nullable=True)

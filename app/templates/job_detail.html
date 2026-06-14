@@ -58,7 +58,14 @@
         <span class="badge badge-neutral" id="thoughtCount">0 steps</span>
     </div>
     <div class="mt-5 ml-1">
-        <ol class="tw-timeline" id="thoughtTimeline"></ol>
+        <div class="tw-timeline-wrap" id="thoughtTimelineWrap">
+            <div class="tw-timeline-fade-top" aria-hidden="true"></div>
+            <span class="tw-timeline-more-above" aria-hidden="true">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+                <span id="thoughtMoreAbove">earlier steps</span>
+            </span>
+            <ol class="tw-timeline" id="thoughtTimeline"></ol>
+        </div>
         <div id="thoughtToggle" class="mt-3 ml-1"></div>
     </div>
 </section>
@@ -475,7 +482,9 @@
             if(JSON.stringify(nv)!==JSON.stringify(VULNS)){VULNS=nv;changed=true;}
             if(changed){rebuild();scale=fitScale();clampView();}
             // Live thought process — stream each reasoning step as it lands.
-            if(window.__renderThoughts)window.__renderThoughts(job.structured_thoughts,ag.thinking_log,isComplete);
+            // Collapse to the first 3 only once the report has been generated.
+            const reportReady=!!(ag.report&&ag.report.status);
+            if(window.__renderThoughts)window.__renderThoughts(job.structured_thoughts,ag.thinking_log,reportReady);
             // Live report + K2 assessment, rendered in place (no page reload).
             if(window.__renderJobSections)window.__renderJobSections(ag,job);
             // Live token counter (animated count-up + flash)
@@ -662,7 +671,7 @@
         });
     }
     let __lastThoughtSig='';
-    let __thoughtsExpanded=false, __thoughtsCache=[], __thoughtsComplete=false;
+    let __thoughtsExpanded=false, __thoughtsCache=[], __reportReady=false;
 
     function thoughtItemHtml(step){
         const tool=step.tool?('<span class="badge '+(TOOL_BADGE[step.tool]||'badge-neutral')+' badge-mono">'+esc(step.tool)+'</span>'):'';
@@ -679,21 +688,35 @@
         const ol=document.getElementById('thoughtTimeline');
         const cnt=document.getElementById('thoughtCount');
         const toggle=document.getElementById('thoughtToggle');
+        const wrap=document.getElementById('thoughtTimelineWrap');
+        const moreLbl=document.getElementById('thoughtMoreAbove');
         if(!ol)return;
         const all=__thoughtsCache;const total=all.length;
         if(cnt)cnt.textContent=total+' step'+(total===1?'':'s');
         if(!total){
             ol.innerHTML='<li class="tw-timeline-item"><span class="tw-timeline-node" style="border-color:#8a8a8a;box-shadow:0 0 0 3px rgba(138,138,138,0.15)"></span><div class="tw-timeline-card"><div class="py-2.5 px-3 text-sm text-ink-300">Waiting for the agent to begin reasoning\u2026</div></div></li>';
             if(toggle)toggle.innerHTML='';
+            if(wrap)wrap.classList.remove('has-more-above');
             return;
         }
-        // Collapsed view: while running show the LATEST 3 (newest first relevant),
-        // once finished show the TOP 3 (the start of the run). Expand for the rest.
-        let visible, note='';
-        if(__thoughtsExpanded||total<=3){visible=all;}
-        else if(__thoughtsComplete){visible=all.slice(0,3);note='Showing the first 3 of '+total+' steps';}
-        else{visible=all.slice(-3);note='Showing the latest 3 of '+total+' steps';}
+        // Collapsed view: ALWAYS show the latest 3 steps while the scan runs.
+        // Only once the report has been generated do we switch to the FIRST 3.
+        // Expand to reveal everything.
+        let visible, note='', moreAbove=false;
+        if(__thoughtsExpanded||total<=3){
+            visible=all;
+        } else if(__reportReady){
+            visible=all.slice(0,3);
+            note='Showing the first 3 of '+total+' steps';
+        } else {
+            visible=all.slice(-3);            // latest 3
+            note='Showing the latest 3 of '+total+' steps';
+            moreAbove=true;                   // earlier steps are scrolled off the top
+        }
         ol.innerHTML=visible.map(thoughtItemHtml).join('');
+        // Fade the timeline upward to hint that earlier steps exist above.
+        if(wrap)wrap.classList.toggle('has-more-above',moreAbove);
+        if(moreLbl&&moreAbove)moreLbl.textContent=(total-3)+' earlier step'+((total-3)===1?'':'s');
         if(toggle){
             if(total>3){
                 toggle.innerHTML=
@@ -707,13 +730,13 @@
         }
     }
 
-    window.__renderThoughts=function(thoughts,thinkingLog,isComplete){
+    window.__renderThoughts=function(thoughts,thinkingLog,reportReady){
         thoughts=Array.isArray(thoughts)?thoughts:[];
         // Prefer the server's finalized timeline; otherwise derive it live.
         if(!thoughts.length)thoughts=buildTimeline(thinkingLog);
-        __thoughtsComplete=!!isComplete;
+        __reportReady=!!reportReady;
         const last=thoughts[thoughts.length-1]||{};
-        const sig=thoughts.length+'|'+(last.iteration!=null?last.iteration:'')+'|'+(last.tool||'')+'|'+String(last.details||'').length+'|'+__thoughtsComplete+'|'+__thoughtsExpanded;
+        const sig=thoughts.length+'|'+(last.iteration!=null?last.iteration:'')+'|'+(last.tool||'')+'|'+String(last.details||'').length+'|'+__reportReady+'|'+__thoughtsExpanded;
         if(sig===__lastThoughtSig)return;
         __lastThoughtSig=sig;
         __thoughtsCache=thoughts;
@@ -794,8 +817,8 @@
     const INIT_THOUGHTS={{ (job.structured_thoughts or (job.attack_graph_data.structured_thoughts if job.attack_graph_data else None) or []) | tojson }};
     const INIT_AG={{ (job.attack_graph_data or {}) | tojson }};
     const INIT_JOB={overall_severity:{{ (job.overall_severity or '') | tojson }}};
-    const INIT_COMPLETE={{ (job.status == 'complete') | tojson }};
-    window.__renderThoughts(INIT_THOUGHTS,INIT_AG.thinking_log,INIT_COMPLETE);
+    const INIT_REPORT_READY=!!(INIT_AG.report&&INIT_AG.report.status);
+    window.__renderThoughts(INIT_THOUGHTS,INIT_AG.thinking_log,INIT_REPORT_READY);
     window.__renderJobSections(INIT_AG,INIT_JOB);
 })();
 </script>

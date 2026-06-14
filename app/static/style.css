@@ -730,3 +730,38 @@ html.light .code-block,
 html.light pre.code-block { background: #f4f5f7 !important; color: #1c2024; }
 /* Token sidebar cells use bg-ink-950 (mapped) — ensure the divider grid reads */
 html.light .bg-ink-950 { color: var(--foreground); }
+
+
+/* ============================================================
+   K2 thought-process timeline — "more above" fade
+   When only the latest steps are shown (mid-scan), the timeline line fades
+   out toward the top to signal there are earlier steps scrolled out of view.
+   ============================================================ */
+.tw-timeline-wrap { position: relative; }
+.tw-timeline-fade-top {
+    position: absolute;
+    top: -2px;
+    left: 0;
+    right: 0;
+    height: 52px;
+    z-index: 6;
+    pointer-events: none;
+    display: none;
+    background: linear-gradient(to bottom, var(--surface), transparent);
+}
+.tw-timeline-wrap.has-more-above .tw-timeline-fade-top { display: block; }
+.tw-timeline-more-above {
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 7;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--muted);
+    display: none;
+    align-items: center;
+    gap: 0.25rem;
+    pointer-events: none;
+}
+.tw-timeline-wrap.has-more-above .tw-timeline-more-above { display: inline-flex; }
