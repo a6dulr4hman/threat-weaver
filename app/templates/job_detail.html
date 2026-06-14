@@ -11,7 +11,7 @@
             <h1 class="page-title">Scan</h1>
             <p class="font-mono text-xs text-ink-200 mt-1.5">{{ job.id }}</p>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3" data-tour="scan-status">
             {% set started_at = job.attack_graph_data.started_at if job.attack_graph_data else None %}
             {% set completed_at = job.attack_graph_data.completed_at if job.attack_graph_data else None %}
             <span id="scanTimer"
@@ -21,7 +21,7 @@
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 <span id="scanTimerValue">00:00</span>
             </span>
-            {% if job.status in ["pending", "ready"] %}
+            {% if job.status == "pending" %}
             <button id="start-job-btn" class="btn btn-primary btn-sm">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Start scan
@@ -32,7 +32,7 @@
                     <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span>
                     <span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
                 </span>
-                Scanning live
+                <span id="liveLabel">{% if job.status == "ready" %}Scan starting&hellip;{% else %}Scanning live{% endif %}</span>
             </span>
             {% else %}
             <span class="badge badge-green">
@@ -44,186 +44,32 @@
     </div>
 </div>
 
-<!-- K2 Thought Process (collapsible) -->
-{% set thoughts = job.structured_thoughts or (job.attack_graph_data.structured_thoughts if job.attack_graph_data else None) %}
-{% if thoughts %}
-<section class="card card-pad mb-6">
-    <details class="group" id="thoughtProcessSection">
-        <summary class="flex items-center gap-3 cursor-pointer list-none select-none">
-            <svg class="w-4 h-4 text-ink-200 group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <h2 class="section-title flex items-center gap-2">
-                <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-                K2 thought process
-            </h2>
-            <span class="badge badge-neutral">{{ thoughts | length }} step{{ 's' if thoughts | length != 1 else '' }}</span>
-        </summary>
+<!-- ===== Two-column layout: main content + sticky token sidebar ===== -->
+<div class="lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-6 lg:items-start">
+<div class="min-w-0">
 
-        <div class="mt-5 ml-1">
-            <ol class="tw-timeline" id="thoughtTimeline">
-                {% for step in thoughts %}
-                <li class="tw-timeline-item">
-                    <span class="tw-timeline-node" aria-hidden="true"></span>
-                    <details class="tw-timeline-card group/step">
-                        <summary class="flex items-center justify-between gap-3 cursor-pointer list-none select-none py-2 px-3">
-                            <div class="flex items-center gap-2 min-w-0">
-                                <svg class="w-3.5 h-3.5 flex-shrink-0 text-ink-300 group-open/step:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                                <span class="tw-timeline-title">{{ step.step_title }}</span>
-                            </div>
-                            <div class="flex items-center gap-2 flex-shrink-0">
-                                {% set tool_badges = {
-                                    'run_nmap': 'badge-blue',
-                                    'send_http_request': 'badge-amber',
-                                    'run_fuzzer': 'badge-orange',
-                                    'execute_safe_poc': 'badge-red',
-                                    'generate_patch': 'badge-green',
-                                    'internet_search': 'badge-violet'
-                                } %}
-                                {% if step.tool %}
-                                <span class="badge {{ tool_badges.get(step.tool, 'badge-neutral') }} badge-mono">{{ step.tool }}</span>
-                                {% endif %}
-                                <span class="text-xs text-ink-400 tabular-nums">#{{ step.iteration }}</span>
-                            </div>
-                        </summary>
-                        {% if step.details %}
-                        <div class="px-3 pb-3 pt-1">
-                            <p class="tw-timeline-details">{{ step.details }}</p>
-                        </div>
-                        {% endif %}
-                    </details>
-                </li>
-                {% endfor %}
-            </ol>
-        </div>
-    </details>
-</section>
-{% endif %}
-
-<!-- Severity & PDF Report -->
-{% set report = job.attack_graph_data.report if job.attack_graph_data else None %}
-{% set severity = job.overall_severity or (job.attack_graph_data.overall_severity if job.attack_graph_data else None) %}
-{% if severity or report %}
-<section class="card card-pad mb-6">
-    <h2 class="section-title mb-4">Report</h2>
-    <div class="flex flex-wrap items-center gap-8">
-        {% if severity %}
-        {% set sev_badge = {"extreme": "badge-red", "critical": "badge-red", "high": "badge-orange", "medium": "badge-yellow", "low": "badge-green"} %}
-        <div>
-            <span class="eyebrow">Overall severity</span>
-            <div class="mt-1.5">
-                <span class="badge {{ sev_badge.get(severity, 'badge-neutral') }}">{{ severity | upper }}</span>
-            </div>
-        </div>
-        {% endif %}
-        <div>
-            <span class="eyebrow">Vulnerability report</span>
-            <div class="mt-1.5">
-                {% if report and report.status == "failed" %}
-                <span class="badge badge-red">Generation failed</span>
-                <p class="text-xs text-ink-300 mt-1.5">{{ report.reason }}</p>
-                {% else %}
-                <a href="/api/jobs/{{ job.id }}/report" class="btn btn-primary btn-sm">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    Download PDF report
-                </a>
-                {% endif %}
-            </div>
-        </div>
+<!-- K2 Thought Process — always visible, streams in live (rendered by JS) -->
+<section class="card card-pad mb-6" id="thoughtProcessSection" data-tour="thought-process">
+    <div class="flex items-center gap-3">
+        <h2 class="section-title flex items-center gap-2">
+            <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+            K2 thought process
+        </h2>
+        <span class="badge badge-neutral" id="thoughtCount">0 steps</span>
+    </div>
+    <div class="mt-5 ml-1">
+        <ol class="tw-timeline" id="thoughtTimeline"></ol>
     </div>
 </section>
-{% endif %}
 
-<!-- K2-Think-v2 Security Assessment -->
-{% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data else None %}
-{% set assessment = job.attack_graph_data.final_assessment if job.attack_graph_data else None %}
-{% set vuln_counts = job.attack_graph_data.vulnerability_counts if job.attack_graph_data else None %}
-{% if assessment %}
-{% set risk = (assessment.overall_risk or 'Informational') | lower %}
-{% set risk_badge = {
-    'critical': 'badge-red',
-    'high':     'badge-orange',
-    'medium':   'badge-yellow',
-    'low':      'badge-green',
-    'informational': 'badge-neutral'
-} %}
-<section class="card card-pad mb-6">
-    <h2 class="section-title mb-4 flex items-center gap-2">
-        <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-        K2-Think-v2 security assessment
-    </h2>
+<!-- Severity & PDF Report — rendered by JS, hidden until data exists -->
+<section class="card card-pad mb-6 hidden" id="reportSection" data-tour="report"></section>
 
-    {% if vuln_counts %}
-    <div class="grid grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden mb-5">
-        <div class="bg-ink-950 px-4 py-3 text-center">
-            <div class="text-2xl font-semibold text-white tracking-tight">{{ vuln_counts.detected }}</div>
-            <div class="eyebrow mt-0.5">Detected</div>
-        </div>
-        <div class="bg-ink-950 px-4 py-3 text-center">
-            <div class="text-2xl font-semibold text-white tracking-tight">{{ vuln_counts.tested }}</div>
-            <div class="eyebrow mt-0.5">Tested</div>
-        </div>
-        <div class="bg-ink-950 px-4 py-3 text-center">
-            <div class="text-2xl font-semibold text-white tracking-tight">{{ vuln_counts.remediated }}</div>
-            <div class="eyebrow mt-0.5">Remediated</div>
-        </div>
-        <div class="bg-ink-950 px-4 py-3 text-center">
-            <div class="text-2xl font-semibold tracking-tight" style="color:#4ade80">{{ vuln_counts.total }}</div>
-            <div class="eyebrow mt-0.5">Total</div>
-        </div>
-    </div>
-    {% endif %}
-
-    <div class="flex flex-wrap items-center gap-8 mb-5">
-        <div>
-            <span class="eyebrow">Vulnerabilities</span>
-            <div class="mt-1 text-2xl font-semibold text-white tracking-tight">{{ assessment.total_vulnerabilities if assessment.total_vulnerabilities is not none else 'n/a' }}</div>
-        </div>
-        <div>
-            <span class="eyebrow">Overall risk</span>
-            <div class="mt-1.5">
-                <span class="badge {{ risk_badge.get(risk, 'badge-neutral') }}">{{ (assessment.overall_risk or 'Informational') | upper }}</span>
-            </div>
-        </div>
-    </div>
-    {% if assessment.executive_summary %}
-    <p class="text-sm text-ink-100 leading-relaxed mb-5">{{ assessment.executive_summary }}</p>
-    {% endif %}
-    {% if assessment.vulnerabilities %}
-    <div class="overflow-x-auto surface-inset">
-        <table class="tw-table">
-            <thead>
-                <tr>
-                    <th>Vulnerability</th>
-                    <th>Endpoint</th>
-                    <th>Severity</th>
-                    <th>CVSS</th>
-                    <th>Confidence</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for v in assessment.vulnerabilities %}
-                {% set vsev = (v.severity or 'low') | lower %}
-                <tr class="align-top">
-                    <td>
-                        <div class="text-sm font-medium text-white">{{ v.name or v.category or 'Finding' }}</div>
-                        {% if v.category and v.name %}<div class="text-xs text-ink-300 mt-0.5">{{ v.category }}</div>{% endif %}
-                        {% if v.impact %}<div class="text-xs text-ink-200 mt-1">{{ v.impact }}</div>{% endif %}
-                    </td>
-                    <td class="text-sm text-ink-100 font-mono">{{ v.endpoint or '-' }}</td>
-                    <td><span class="badge {{ risk_badge.get(vsev, 'badge-neutral') }}">{{ (v.severity or 'n/a') | upper }}</span></td>
-                    <td class="text-sm text-ink-100">{{ v.cvss if v.cvss is not none else '-' }}</td>
-                    <td class="text-sm text-ink-100">{{ v.confidence or '-' }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% endif %}
-    <p class="text-xs text-ink-400 mt-4">K2-Think-v2 selected one definitive verdict per vulnerability from the evidence gathered during this scan.</p>
-</section>
-{% endif %}
+<!-- K2 security assessment — rendered by JS, hidden until data exists -->
+<section class="card card-pad mb-6 hidden" id="assessmentSection"></section>
 
 <!-- Attack Graph (Canvas Node Graph) -->
-<section class="card card-pad mb-6">
+<section class="card card-pad mb-6" data-tour="attack-graph">
     <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h2 class="section-title flex items-center gap-2">
             <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
@@ -239,7 +85,7 @@
 
     {% set tool_results = job.attack_graph_data.tool_results if job.attack_graph_data and job.attack_graph_data.tool_results else [] %}
 
-    <div class="relative rounded-xl border border-white/10 bg-black overflow-hidden" style="height:600px;" id="graphWrap">
+    <div class="relative rounded-xl border border-white/10 bg-black tw-graph-dark overflow-hidden" style="height:600px;" id="graphWrap">
         <canvas id="attackGraphCanvas" style="width:100%;height:100%;cursor:grab;"></canvas>
         <div class="absolute bottom-3 right-3 flex gap-1.5 z-20">
             <button onclick="graphZoom(1.25)" class="w-8 h-8 rounded-lg bg-ink-950/90 border border-white/10 text-ink-100 hover:bg-ink-800 hover:text-white flex items-center justify-center text-base font-medium transition-colors">+</button>
@@ -553,7 +399,16 @@
     });
     canvas.addEventListener('mouseup',()=>{dragging=false;canvas.style.cursor='grab';});
     canvas.addEventListener('mouseleave',()=>{dragging=false;if(hoverNode){hoverNode=null;requestRender();}});
-    canvas.addEventListener('wheel',e=>{e.preventDefault();scale*=(e.deltaY<0?1.12:0.88);clampView();requestRender();},{passive:false});
+    canvas.addEventListener('wheel',e=>{
+        e.preventDefault();
+        // Zoom toward the cursor: keep the world point under the mouse fixed.
+        const r=canvas.getBoundingClientRect();
+        const mx=e.clientX-r.left,my=e.clientY-r.top;
+        const wx=(mx-offsetX)/scale,wy=(my-offsetY)/scale;
+        scale*=(e.deltaY<0?1.12:0.88);
+        offsetX=mx-wx*scale;offsetY=my-wy*scale;
+        clampView();requestRender();
+    },{passive:false});
     window.graphZoom=f=>{scale*=f;clampView();requestRender();};
     window.graphReset=()=>{scale=fitScale();clampView();requestRender();};
     window.addEventListener('resize',()=>{resize();clampView();requestRender();});
@@ -584,6 +439,7 @@
 
     if(JOB_STATUS!=='complete'){
         function startLivePoll(){
+        if(window.__pollStarted)return;window.__pollStarted=true;
         let lastPhase='';
         let lastMitCount=document.querySelectorAll('#mitigationsContainer .surface-inset').length;
 
@@ -610,25 +466,17 @@
         function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
         const poll=setInterval(async()=>{try{const resp=await fetch('/api/jobs/'+JOB_ID);if(!resp.ok)return;const job=await resp.json();const ag=job.attack_graph_data||{};
-            // Track phase for reload-on-first-transition (pending→recon)
             const phase=job.pipeline_phase||job.status||'';const isComplete=job.status==='complete';
-            if(phase!==lastPhase){
-                // Reload the page ONCE on a genuine pending/ready -> running
-                // transition (so the server re-renders the live view). We must
-                // NOT treat the initial poll of an already-running scan
-                // (lastPhase==='') as a transition: lastPhase resets to '' on
-                // every page load, so doing so reloaded the page forever.
-                const wasWaiting=(lastPhase==='pending'||lastPhase==='ready');
-                const nowRunning=phase&&phase!=='pending'&&phase!=='ready';
-                if(wasWaiting&&nowRunning&&!isComplete){lastPhase=phase;window.location.reload();return;}
-                lastPhase=phase;
-            }
+            lastPhase=phase;
             // Live graph update
             const nr=ag.tool_results||[];const nv=ag.vulnerabilities||[];let changed=false;
             if(nr.length!==raw.length){raw=nr;changed=true;}
             if(JSON.stringify(nv)!==JSON.stringify(VULNS)){VULNS=nv;changed=true;}
             if(changed){rebuild();scale=fitScale();clampView();}
-            // Live token counter
+            // Live thought process — stream each reasoning step as it lands.
+            if(window.__renderThoughts)window.__renderThoughts(job.structured_thoughts);
+            // Live report + K2 assessment, rendered in place (no page reload).
+            if(window.__renderJobSections)window.__renderJobSections(ag,job);
             // Live token counter (animated count-up + flash)
             const tu=ag.token_usage;if(tu){const el=id=>document.getElementById(id);
                 if(el('tkTotal'))window.__animateNum(el('tkTotal'),tu.total_tokens);if(el('tkPrompt'))window.__animateNum(el('tkPrompt'),tu.prompt_tokens);
@@ -636,24 +484,17 @@
             // Live scan timer
             if(window.__updateScanTimer)window.__updateScanTimer(ag.started_at,ag.completed_at);
             const st=document.getElementById('graphSteps');if(st)st.textContent=nr.length+' steps';
+            // Live status label (Recon / Exploiting / Verifying / …)
+            if(window.__updateLiveLabel)window.__updateLiveLabel(phase,isComplete);
             // Live mitigations
             await fetchMitigations();
-            // Reload ONLY once all three finalization signals are present:
-            //   1. job.status === 'complete'
-            //   2. attack_graph_data.report exists (PDF generated)
-            //   3. attack_graph_data.completed_at is stamped
-            // completed_at is written last in _finalize_and_report, so its
-            // presence guarantees the timer has the correct final value and
-            // the assessment/report are fully committed before the reload.
+            // Finalized: stop polling and flip the status badge to Complete.
+            // No reload — every section above has been kept current live, so
+            // the report link, severity, and assessment table are already shown.
             const isFinalized=isComplete&&ag.report&&ag.report.status&&ag.completed_at;
-            if(isFinalized){clearInterval(poll);const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');
+            if(isFinalized){clearInterval(poll);window.__pollStarted=false;const tag=document.getElementById('graphLiveTag');if(tag)tag.classList.add('hidden');
                 const li=document.getElementById('live-indicator');if(li)li.outerHTML='<span class="badge badge-green"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Complete</span>';
-                // Freeze the timer with the committed completed_at, then reload
-                // immediately so the server-rendered report link, severity badge,
-                // and K2 assessment table all appear. Tokens/mitigations/graph
-                // have been updating live throughout so nothing is lost.
-                if(window.__updateScanTimer)window.__updateScanTimer(ag.started_at,ag.completed_at);
-                window.location.reload();}
+                if(window.__updateScanTimer)window.__updateScanTimer(ag.started_at,ag.completed_at);}
         }catch(e){}},3000);
         }
         window.__startLivePoll=startLivePoll;
@@ -672,7 +513,7 @@
 </section>
 
 <!-- Mitigations -->
-<section class="card card-pad" data-mitigations-section>
+<section class="card card-pad" data-mitigations-section data-tour="mitigations">
     <h2 class="section-title mb-4 flex items-center gap-2">
         <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
         Mitigations
@@ -742,17 +583,20 @@
     {% endif %}
 </section>
 
-<!-- K2-Think-v2 Token Usage Counter -->
-{% if job.attack_graph_data %}
-<section class="card card-pad mt-6">
+</div><!-- /main column -->
+
+<!-- ===== Sticky sidebar: K2 token usage (always visible) ===== -->
+<aside class="mt-6 lg:mt-0 lg:sticky lg:top-20" data-tour="token-sidebar">
+{% set token_usage = job.attack_graph_data.token_usage if job.attack_graph_data else None %}
+<section class="card card-pad">
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
         <h2 class="section-title flex items-center gap-2">
             <svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
-            K2-Think-v2 token usage
+            K2 token usage
         </h2>
-        <span class="text-xs text-ink-400">MBZUAI-IFM/K2-Think-v2</span>
     </div>
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden">
+    <p class="text-[11px] text-ink-400 mb-3">MBZUAI-IFM/K2-Think-v2</p>
+    <div class="grid grid-cols-2 lg:grid-cols-1 gap-px bg-white/10 rounded-xl overflow-hidden">
         <div class="bg-ink-950 px-4 py-3">
             <div class="eyebrow">Total tokens</div>
             <div class="mt-0.5 text-lg font-semibold text-white tracking-tight" id="tkTotal">{{ "{:,}".format(token_usage.total_tokens or 0) if token_usage else 0 }}</div>
@@ -770,9 +614,117 @@
             <div class="mt-0.5 text-lg font-semibold text-ink-100 tracking-tight" id="tkCalls">{{ token_usage.llm_calls or 0 if token_usage else 0 }}</div>
         </div>
     </div>
-    <p class="text-xs text-ink-400 mt-2">Counts every K2-Think-v2 call: agent reasoning, patch synthesis, and final assessment.</p>
+    <p class="text-[11px] text-ink-400 mt-3 leading-relaxed">Counts every K2-Think-v2 call: agent reasoning, patch synthesis, and final assessment.</p>
 </section>
-{% endif %}
+</aside>
+
+</div><!-- /two-column grid -->
+
+<script>
+// ===== Live, no-reload rendering of thought process, report & assessment =====
+(function(){
+    function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    const TOOL_BADGE={run_nmap:'badge-blue',send_http_request:'badge-amber',run_fuzzer:'badge-orange',execute_safe_poc:'badge-red',generate_patch:'badge-green',internet_search:'badge-violet'};
+    const SEV_BADGE={extreme:'badge-red',critical:'badge-red',high:'badge-orange',medium:'badge-yellow',low:'badge-green',informational:'badge-neutral'};
+    const PHASE_LABEL={ready:'Scan starting\u2026',recon:'Recon \u00b7 live',dast_testing:'Exploiting \u00b7 live',poc_verification:'Verifying \u00b7 live',blue_team_remediation:'Patching \u00b7 live',complete:'Finalizing\u2026'};
+
+    // ---- Thought process timeline (streams each step as it lands) ----
+    let __lastThoughtCount=-1;
+    window.__renderThoughts=function(thoughts){
+        const ol=document.getElementById('thoughtTimeline');const cnt=document.getElementById('thoughtCount');
+        if(!ol)return;
+        thoughts=Array.isArray(thoughts)?thoughts:[];
+        if(thoughts.length===__lastThoughtCount)return;
+        __lastThoughtCount=thoughts.length;
+        if(cnt)cnt.textContent=thoughts.length+' step'+(thoughts.length===1?'':'s');
+        if(!thoughts.length){
+            ol.innerHTML='<li class="tw-timeline-item"><span class="tw-timeline-node" style="border-color:#8a8a8a;box-shadow:0 0 0 3px rgba(138,138,138,0.15)"></span><div class="tw-timeline-card"><div class="py-2.5 px-3 text-sm text-ink-300">Waiting for the agent to begin reasoning\u2026</div></div></li>';
+            return;
+        }
+        ol.innerHTML=thoughts.map(function(step){
+            const tool=step.tool?('<span class="badge '+(TOOL_BADGE[step.tool]||'badge-neutral')+' badge-mono">'+esc(step.tool)+'</span>'):'';
+            const details=step.details?('<div class="px-3 pb-3 pt-1"><p class="tw-timeline-details">'+esc(step.details)+'</p></div>'):'';
+            const iter=(step.iteration!=null)?('<span class="text-xs text-ink-400 tabular-nums">#'+esc(step.iteration)+'</span>'):'';
+            return '<li class="tw-timeline-item"><span class="tw-timeline-node" aria-hidden="true"></span>'+
+                '<details class="tw-timeline-card group/step"><summary class="flex items-center justify-between gap-3 cursor-pointer list-none select-none py-2 px-3">'+
+                '<div class="flex items-center gap-2 min-w-0"><svg class="w-3.5 h-3.5 flex-shrink-0 text-ink-300 group-open/step:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'+
+                '<span class="tw-timeline-title">'+esc(step.step_title||('Step '+(step.iteration!=null?step.iteration:'')))+'</span></div>'+
+                '<div class="flex items-center gap-2 flex-shrink-0">'+tool+iter+'</div></summary>'+details+'</details></li>';
+        }).join('');
+    };
+
+    // ---- Report (severity + PDF download) ----
+    let __lastReport='';
+    window.__renderReport=function(ag,job){
+        const sec=document.getElementById('reportSection');if(!sec)return;
+        const severity=(job&&job.overall_severity)||ag.overall_severity||'';
+        const report=ag.report||null;
+        const key=JSON.stringify([severity,report]);if(key===__lastReport)return;__lastReport=key;
+        if(!severity&&!report){sec.classList.add('hidden');return;}
+        let sevHtml='';
+        if(severity){sevHtml='<div><span class="eyebrow">Overall severity</span><div class="mt-1.5"><span class="badge '+(SEV_BADGE[String(severity).toLowerCase()]||'badge-neutral')+'">'+esc(String(severity).toUpperCase())+'</span></div></div>';}
+        let repHtml;
+        if(report&&report.status==='failed'){repHtml='<span class="badge badge-red">Generation failed</span>'+(report.reason?'<p class="text-xs text-ink-300 mt-1.5">'+esc(report.reason)+'</p>':'');}
+        else{repHtml='<a href="/api/jobs/{{ job.id }}/report" class="btn btn-primary btn-sm"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Download PDF report</a>';}
+        sec.innerHTML='<h2 class="section-title mb-4">Report</h2><div class="flex flex-wrap items-center gap-8">'+sevHtml+'<div><span class="eyebrow">Vulnerability report</span><div class="mt-1.5">'+repHtml+'</div></div></div>';
+        sec.classList.remove('hidden');
+    };
+
+    // ---- K2 security assessment ----
+    let __lastAssess='';
+    window.__renderAssessment=function(ag){
+        const sec=document.getElementById('assessmentSection');if(!sec)return;
+        const a=ag.final_assessment;const counts=ag.vulnerability_counts;
+        const key=JSON.stringify([a,counts]);if(key===__lastAssess)return;__lastAssess=key;
+        if(!a){sec.classList.add('hidden');return;}
+        const risk=String(a.overall_risk||'Informational').toLowerCase();
+        let html='<h2 class="section-title mb-4 flex items-center gap-2"><svg class="w-4 h-4 text-ink-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>K2-Think-v2 security assessment</h2>';
+        if(counts){
+            html+='<div class="grid grid-cols-4 gap-px bg-white/10 rounded-xl overflow-hidden mb-5">'+
+            '<div class="bg-ink-950 px-4 py-3 text-center"><div class="text-2xl font-semibold text-white tracking-tight">'+esc(counts.detected)+'</div><div class="eyebrow mt-0.5">Detected</div></div>'+
+            '<div class="bg-ink-950 px-4 py-3 text-center"><div class="text-2xl font-semibold text-white tracking-tight">'+esc(counts.tested)+'</div><div class="eyebrow mt-0.5">Tested</div></div>'+
+            '<div class="bg-ink-950 px-4 py-3 text-center"><div class="text-2xl font-semibold text-white tracking-tight">'+esc(counts.remediated)+'</div><div class="eyebrow mt-0.5">Remediated</div></div>'+
+            '<div class="bg-ink-950 px-4 py-3 text-center"><div class="text-2xl font-semibold tracking-tight" style="color:#4ade80">'+esc(counts.total)+'</div><div class="eyebrow mt-0.5">Total</div></div></div>';
+        }
+        html+='<div class="flex flex-wrap items-center gap-8 mb-5"><div><span class="eyebrow">Vulnerabilities</span><div class="mt-1 text-2xl font-semibold text-white tracking-tight">'+(a.total_vulnerabilities!=null?esc(a.total_vulnerabilities):'n/a')+'</div></div>'+
+        '<div><span class="eyebrow">Overall risk</span><div class="mt-1.5"><span class="badge '+(SEV_BADGE[risk]||'badge-neutral')+'">'+esc(String(a.overall_risk||'Informational').toUpperCase())+'</span></div></div></div>';
+        if(a.executive_summary){html+='<p class="text-sm text-ink-100 leading-relaxed mb-5">'+esc(a.executive_summary)+'</p>';}
+        if(a.vulnerabilities&&a.vulnerabilities.length){
+            html+='<div class="overflow-x-auto surface-inset"><table class="tw-table"><thead><tr><th>Vulnerability</th><th>Endpoint</th><th>Severity</th><th>CVSS</th><th>Confidence</th></tr></thead><tbody>';
+            html+=a.vulnerabilities.map(function(v){
+                const vsev=String(v.severity||'low').toLowerCase();
+                return '<tr class="align-top"><td><div class="text-sm font-medium text-white">'+esc(v.name||v.category||'Finding')+'</div>'+
+                ((v.category&&v.name)?'<div class="text-xs text-ink-300 mt-0.5">'+esc(v.category)+'</div>':'')+
+                (v.impact?'<div class="text-xs text-ink-200 mt-1">'+esc(v.impact)+'</div>':'')+'</td>'+
+                '<td class="text-sm text-ink-100 font-mono">'+esc(v.endpoint||'-')+'</td>'+
+                '<td><span class="badge '+(SEV_BADGE[vsev]||'badge-neutral')+'">'+esc(String(v.severity||'n/a').toUpperCase())+'</span></td>'+
+                '<td class="text-sm text-ink-100">'+(v.cvss!=null?esc(v.cvss):'-')+'</td>'+
+                '<td class="text-sm text-ink-100">'+esc(v.confidence||'-')+'</td></tr>';
+            }).join('');
+            html+='</tbody></table></div>';
+        }
+        html+='<p class="text-xs text-ink-400 mt-4">K2-Think-v2 selected one definitive verdict per vulnerability from the evidence gathered during this scan.</p>';
+        sec.innerHTML=html;sec.classList.remove('hidden');
+    };
+
+    window.__renderJobSections=function(ag,job){window.__renderReport(ag,job);window.__renderAssessment(ag);};
+
+    // ---- Live status label (Recon / Exploiting / Verifying / …) ----
+    window.__updateLiveLabel=function(phase,isComplete){
+        if(isComplete)return;
+        const lbl=document.getElementById('liveLabel');
+        if(lbl&&PHASE_LABEL[phase])lbl.textContent=PHASE_LABEL[phase];
+    };
+
+    // ---- Initial render from server-provided data (so a completed job is
+    //      fully shown on first paint without waiting for the first poll) ----
+    const INIT_THOUGHTS={{ (job.structured_thoughts or (job.attack_graph_data.structured_thoughts if job.attack_graph_data else None) or []) | tojson }};
+    const INIT_AG={{ (job.attack_graph_data or {}) | tojson }};
+    const INIT_JOB={overall_severity:{{ (job.overall_severity or '') | tojson }}};
+    window.__renderThoughts(INIT_THOUGHTS);
+    window.__renderJobSections(INIT_AG,INIT_JOB);
+})();
+</script>
 
 <script>
 // --- Scan duration timer ------------------------------------------------ //
@@ -867,7 +819,7 @@ if (startJobBtn) {
             });
             if (resp.ok) {
                 // Replace button with live indicator immediately.
-                startJobBtn.outerHTML = '<span id="live-indicator" class="badge badge-neutral"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span></span>Scanning live</span>';
+                startJobBtn.outerHTML = '<span id="live-indicator" class="badge badge-neutral"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span></span><span id="liveLabel">Scan starting\u2026</span></span>';
                 // Kick off poll loop (the graph IIFE skipped it because JOB_STATUS was pending/ready).
                 if (window.__startLivePoll) window.__startLivePoll();
             } else {

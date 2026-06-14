@@ -7,7 +7,7 @@
     <p class="page-subtitle">Register attack surfaces and orchestrate autonomous threat analysis.</p>
 </div>
 
-<section class="card card-pad mb-8">
+<section class="card card-pad mb-8" data-tour="create-workspace">
     <h2 class="section-title mb-1">Create workspace</h2>
     <p class="text-sm text-ink-200 mb-5">Add a target domain to begin reconnaissance and verification.</p>
     <form id="create-workspace-form" class="flex flex-col sm:flex-row items-stretch gap-3">
@@ -19,7 +19,7 @@
     </form>
 </section>
 
-<section class="card">
+<section class="card" data-tour="workspace-list">
     <div class="flex items-center justify-between px-6 pt-5 pb-4">
         <h2 class="section-title">Workspaces</h2>
         <span class="text-xs text-ink-300">{{ workspaces | length }} total</span>
@@ -29,16 +29,14 @@
             <thead>
                 <tr>
                     <th>Target URL</th>
-                    <th>Nonce</th>
                     <th>Status</th>
                     <th class="text-right">Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for ws in workspaces %}
-                <tr>
+                <tr class="row-link" data-href="/workspaces/{{ ws.id }}">
                     <td class="font-medium text-white">{{ ws.target_url }}</td>
-                    <td class="font-mono text-xs text-ink-200">{{ ws.verification_nonce[:8] }}&hellip;</td>
                     <td>
                         {% if ws.verification_status %}
                         <span class="badge badge-green"><span class="badge-dot"></span>Verified</span>
@@ -48,14 +46,14 @@
                     </td>
                     <td class="text-right">
                         <a href="/workspaces/{{ ws.id }}" class="inline-flex items-center gap-1 text-sm link-muted">
-                            View
+                            Open
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                         </a>
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4">
+                    <td colspan="3">
                         <div class="py-14 text-center">
                             <svg class="w-10 h-10 mx-auto text-ink-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
                             <p class="text-sm text-ink-200">No workspaces yet.</p>

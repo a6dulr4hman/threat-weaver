@@ -33,7 +33,7 @@
 </div>
 
 <!-- Verification Instructions -->
-<section class="card card-pad mb-6">
+<section class="card card-pad mb-6" data-tour="dns-verify">
     <h2 class="section-title mb-1">DNS verification</h2>
     <p class="text-sm text-ink-200 mb-5">To verify ownership, add a DNS TXT record with the values below.</p>
 
@@ -66,11 +66,11 @@
 </section>
 
 <!-- Jobs Table -->
-<section class="card">
+<section class="card" data-tour="jobs-section">
     <div class="flex items-center justify-between px-6 pt-5 pb-4">
         <h2 class="section-title">Analysis jobs</h2>
         {% if workspace.verification_status %}
-        <button id="start-scan-btn" class="btn btn-primary btn-sm">
+        <button id="start-scan-btn" class="btn btn-primary btn-sm" data-tour="start-scan">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             Start new scan
         </button>
@@ -78,7 +78,7 @@
         <span class="text-xs text-ink-400">Verify the domain to enable scanning</span>
         {% endif %}
     </div>
-    <div class="overflow-x-auto">
+    <div class="overflow-x-auto" data-tour="jobs-table">
         <table class="tw-table">
             <thead>
                 <tr>
@@ -90,8 +90,8 @@
             </thead>
             <tbody>
                 {% for job in jobs %}
-                <tr>
-                    <td class="font-mono text-xs text-ink-100">{{ job.id[:8] }}&hellip;</td>
+                <tr class="row-link" data-href="/jobs/{{ job.id }}">
+                    <td class="font-mono text-xs text-ink-100 whitespace-nowrap">{{ job.id }}</td>
                     <td><span class="badge badge-neutral">{{ job.status }}</span></td>
                     <td>
                         {% set sev = job.overall_severity or (job.attack_graph_data.overall_severity if job.attack_graph_data else None) %}

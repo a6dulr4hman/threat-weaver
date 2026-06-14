@@ -29,13 +29,55 @@
             width: 100% !important;
         }
 
-        /* Hide Clerk's app logo + "Sign in to Falak.me" header entirely */
-        .cl-header,
-        .cl-headerTitle,
-        .cl-headerSubtitle,
+        /* Hide only Clerk's app logo / application-name branding.
+           Keep the header title + subtitle visible so instructional copy
+           (e.g. "Enter the verification code sent to your email") shows. */
         .cl-logoBox,
         .cl-logoImage,
         .cl-applicationName { display: none !important; }
+
+        /* Default ALL Clerk card text to a readable light color. Previously
+           legal/consent text, the "verify your email" instructions, and the
+           OTP code page rendered near-black on the black card and were
+           effectively invisible. */
+        .cl-card,
+        .cl-card p,
+        .cl-card span,
+        .cl-card label,
+        .cl-card a,
+        .cl-headerTitle,
+        .cl-headerSubtitle,
+        .cl-identityPreviewText,
+        .cl-formFieldLabel,
+        .cl-formFieldHintText,
+        .cl-formFieldInfoText,
+        .cl-otpCodeFieldErrorText,
+        .cl-formResendCodeLink,
+        .cl-alertText,
+        .cl-footerActionText { color: #ededed !important; }
+
+        .cl-headerTitle { color: #ffffff !important; font-weight: 600 !important; }
+        .cl-headerSubtitle,
+        .cl-formFieldHintText { color: #a1a1a1 !important; }
+
+        /* Links inside the legal/terms+privacy consent line stay clearly white */
+        .cl-footerActionLink,
+        .cl-formFieldLabel a,
+        .cl-card a[href*="terms"],
+        .cl-card a[href*="privacy"] { color: #ffffff !important; text-decoration: underline !important; }
+
+        /* Verification-code (OTP) input cells: white digits on dark cells */
+        .cl-otpCodeFieldInput,
+        .cl-otpCodeFieldInputs input {
+            background: #050505 !important;
+            border: 1px solid rgba(255,255,255,0.18) !important;
+            color: #ffffff !important;
+            caret-color: #ffffff !important;
+        }
+        .cl-otpCodeFieldInput:focus {
+            border-color: rgba(255,255,255,0.55) !important;
+            box-shadow: 0 0 0 3px rgba(255,255,255,0.08) !important;
+        }
 
         /* Primary button */
         .cl-formButtonPrimary {
@@ -83,12 +125,12 @@
         .cl-footerActionLink:hover { color: #fff !important; }
         .cl-footerActionText { color: #707070 !important; }
 
-        /* Hide "Secured by Clerk" badge */
+        /* Hide only the "Secured by Clerk" badge + help link.
+           Terms / Privacy links are intentionally kept visible (and styled
+           white above) so the legal agreements are readable on the dark card. */
         .cl-internal-b3fm6y,
         .cl-internal-1fcj7sw,
-        [data-localization-key="footerPageLink__help"],
-        [data-localization-key="footerPageLink__privacy"],
-        [data-localization-key="footerPageLink__terms"] { display: none !important; }
+        [data-localization-key="footerPageLink__help"] { display: none !important; }
     </style>
 </head>
 <body class="tw-body min-h-screen flex items-center justify-center font-sans antialiased">

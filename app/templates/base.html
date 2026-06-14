@@ -31,6 +31,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <!-- Theme + guided tour. Loaded in <head> (no defer) so the saved theme is
+         applied before first paint, avoiding a dark→light flash. -->
+    <script src="/static/app.js"></script>
 </head>
 <body class="tw-body min-h-screen flex flex-col font-sans antialiased">
     <div class="tw-grid-bg" aria-hidden="true"></div>
@@ -49,19 +52,35 @@
 
             <!-- Right side -->
             <div class="flex items-center gap-2 text-sm">
-                <a href="/" class="px-3 py-1.5 rounded-md text-ink-200 hover:text-white hover:bg-white/5 transition-colors">Dashboard</a>
+                <!-- Theme toggle (dark default) -->
+                <button type="button" onclick="toggleTheme()" data-tour="theme" aria-label="Toggle theme"
+                        class="inline-flex items-center justify-center w-9 h-9 rounded-md border border-white/10 text-ink-100 hover:bg-white/5 transition-colors">
+                    <svg class="theme-icon-moon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+                    <svg class="theme-icon-sun w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                </button>
+
+                <!-- Replay the guided tour -->
+                <button type="button" onclick="startGuide()" data-tour="guide"
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/10 text-ink-100 hover:bg-white/5 transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Guide
+                </button>
+
                 <a href="https://github.com/a6dulr4hman/threat-weaver" target="_blank" rel="noreferrer"
                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/10 text-ink-100 hover:bg-white/5 transition-colors">
                     <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.36 9.36 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
                     GitHub
                 </a>
 
-                <!-- User menu — populated by Clerk.js when auth is enabled -->
+                <!-- User menu — populated by Clerk.js when auth is enabled.
+                     Clicking the profile opens Clerk's account settings. -->
                 <div id="user-menu" class="hidden items-center gap-2">
-                    <div id="user-info" class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-white/10">
+                    <button id="user-info" type="button" data-tour="account" title="Manage your account"
+                            class="flex items-center gap-2 px-3 py-1.5 rounded-md border border-white/10 hover:bg-white/5 transition-colors cursor-pointer">
                         <div id="user-avatar" class="w-6 h-6 rounded-full bg-ink-700 flex items-center justify-center text-xs font-medium text-white"></div>
                         <span id="user-email" class="text-xs text-ink-200 max-w-[140px] truncate"></span>
-                    </div>
+                        <svg class="w-3.5 h-3.5 text-ink-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    </button>
                     <button id="sign-out-btn"
                             class="px-3 py-1.5 rounded-md text-ink-300 hover:text-white hover:bg-white/5 transition-colors text-xs">
                         Sign out
@@ -126,6 +145,7 @@
                 const userMenu   = document.getElementById('user-menu');
                 const userAvatar = document.getElementById('user-avatar');
                 const userEmail  = document.getElementById('user-email');
+                const userInfo   = document.getElementById('user-info');
                 const signOutBtn = document.getElementById('sign-out-btn');
                 const signInLink = document.getElementById('sign-in-link');
 
@@ -139,6 +159,19 @@
                     userEmail.textContent = u.primaryEmailAddress?.emailAddress || u.firstName || 'Account';
                     userMenu.classList.remove('hidden');
                     userMenu.classList.add('flex');
+                    // Clicking the profile opens Clerk's account-management modal
+                    // (manage email, password, security, connected accounts, …).
+                    if (userInfo) {
+                        userInfo.addEventListener('click', () => {
+                            try {
+                                if (typeof clerk.openUserProfile === 'function') {
+                                    clerk.openUserProfile();
+                                } else {
+                                    window.location.href = 'https://accounts.clerk.dev/user';
+                                }
+                            } catch (_) {}
+                        });
+                    }
                     signOutBtn.addEventListener('click', async () => {
                         await clerk.signOut();
                         window.location.href = '/sign-in';
