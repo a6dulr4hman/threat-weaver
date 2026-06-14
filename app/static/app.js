@@ -48,8 +48,9 @@
             },
             {
                 title: '1 · Create a workspace',
-                body: 'A workspace is a target domain you own. Type the domain (e.g. example.com) and create it. You can only scan domains you control.',
-                selector: '[data-tour="create-workspace"]'
+                body: 'A workspace is a target domain you own. Type the domain (e.g. example.com) right here — go ahead, the guide stays open — then press Create. You can only scan domains you control.',
+                selector: '[data-tour="create-workspace"]',
+                interact: true
             },
             {
                 title: '2 · Open a workspace',
@@ -85,13 +86,15 @@
             },
             {
                 title: '2 · Verify the domain',
-                body: 'Once the TXT record is live, click "Verify domain". ThreatWeaver re-checks DNS and unlocks scanning when it matches.',
-                selector: '[data-tour="verify-btn"]'
+                body: 'Once the TXT record is live, click "Verify domain" — try it now, the guide will stay open. ThreatWeaver re-checks DNS and unlocks scanning when it matches.',
+                selector: '#verify-btn',
+                interact: true
             },
             {
                 title: '3 · Start a scan',
-                body: 'After verification, launch an autonomous scan from here. You\'ll be taken to a live view of the attack.',
-                selector: '[data-tour="jobs-section"]'
+                body: 'After verification, launch an autonomous scan from this button. Click it whenever you\'re ready — you\'ll be taken to a live view of the attack.',
+                selector: '[data-tour="start-scan"]',
+                interact: true
             },
             {
                 title: 'Review past scans',
@@ -155,7 +158,7 @@
     let tourState = null;
 
     function clearTourDom() {
-        document.querySelectorAll('.tw-tour-ring, .tw-tour-pop, .tw-tour-overlay-block')
+        document.querySelectorAll('.tw-tour-ring, .tw-tour-pop, .tw-tour-overlay-block, .tw-tour-shield')
             .forEach(function (el) { el.remove(); });
         window.removeEventListener('resize', repositionTour);
         window.removeEventListener('scroll', repositionTour, true);
@@ -199,6 +202,24 @@
         });
     }
 
+    function positionShield(r, pad) {
+        // For interactive steps we cut a hole in the click-shield around the
+        // focused element using 4 strips, so the element stays usable.
+        if (!tourState || !tourState.interactive) return;
+        const s = tourState.shield;
+        if (!s || s.length < 4) return;
+        const vh = window.innerHeight;
+        const base = 'position:fixed;z-index:9997;background:transparent;';
+        const top = Math.max(0, r.top - pad);
+        const bottom = Math.min(vh, r.bottom + pad);
+        const left = Math.max(0, r.left - pad);
+        const right = r.right + pad;
+        s[0].style.cssText = base + 'left:0;top:0;width:100%;height:' + top + 'px;';
+        s[1].style.cssText = base + 'left:0;top:' + bottom + 'px;width:100%;bottom:0;';
+        s[2].style.cssText = base + 'left:0;top:' + top + 'px;width:' + left + 'px;height:' + (bottom - top) + 'px;';
+        s[3].style.cssText = base + 'left:' + right + 'px;top:' + top + 'px;right:0;height:' + (bottom - top) + 'px;';
+    }
+
     function repositionTour() {
         if (!tourState) return;
         const step = tourState.current || tourState.steps[tourState.index];
@@ -226,6 +247,7 @@
             ring.style.width = (r.width + pad * 2) + 'px';
             ring.style.height = (r.height + pad * 2) + 'px';
         }
+        positionShield(r, pad);
 
         // Position the popover: prefer below, else above, clamped to viewport.
         const popW = pop.offsetWidth || 320;
@@ -264,19 +286,43 @@
         if (target) {
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
+        // Interactive steps let the user use the focused element (type a domain,
+        // click Verify/Start) WITHOUT closing the guide.
+        const interactive = !!(step.interact && target);
+        tourState.interactive = interactive;
 
-        // Invisible click-shield so the page can't be interacted with mid-tour.
-        // It does NOT dismiss the tour — the guide stays until the user uses
-        // Next/Back/Skip/Done. (Previously any click here closed the tour, so
-        // it vanished the moment you touched the page.)
-        const block = document.createElement('div');
-        block.className = 'tw-tour-overlay-block';
-        document.body.appendChild(block);
+        // Click-shield. Non-interactive steps get one full-screen shield (the
+        // whole page is inert). Interactive steps get 4 strips that leave a
+        // hole around the focused element so it stays clickable/typable.
+        if (interactive) {
+            tourState.shield = [0, 1, 2, 3].map(function () {
+                const d = document.createElement('div');
+                d.className = 'tw-tour-shield';
+                document.body.appendChild(d);
+                return d;
+            });
+        } else {
+            const block = document.createElement('div');
+            block.className = 'tw-tour-overlay-block';
+            document.body.appendChild(block);
+            tourState.shield = [block];
+        }
 
         const ring = document.createElement('div');
-        ring.className = 'tw-tour-ring';
+        ring.className = 'tw-tour-ring' + (interactive ? ' is-pulse' : '');
         ring.style.display = 'none';
         document.body.appendChild(ring);
+
+        // Auto-focus a form field inside the focused element (e.g. the domain
+        // input) once the scroll settles, so the user can start typing.
+        if (interactive) {
+            setTimeout(function () {
+                const f = target.matches('input, textarea, select')
+                    ? target
+                    : target.querySelector('input, textarea, select');
+                if (f) { try { f.focus({ preventScroll: true }); } catch (e) { f.focus(); } }
+            }, 420);
+        }
 
         const pop = document.createElement('div');
         pop.className = 'tw-tour-pop';
